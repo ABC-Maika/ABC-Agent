@@ -181,7 +181,7 @@ ARENA_LOCK_PROVIDED_CAPACITY_PER_STORE: Final[float] = 700.0
 
 
 def arena_lock_config() -> CoreConfig:
-    """The named arena at the Phase-6 lock — the three ``ARENA_LOCK_*`` constants.
+    """The named arena config with the three ``ARENA_LOCK_*`` lock knobs applied.
 
     Every other knob is inherited from :func:`arena_config`'s defaults. This is the config the league driver and the ladder train/rate on (see :data:`ARENA_ENV_LABEL`).
     """
@@ -216,14 +216,12 @@ ARENA_ENV_LABEL: str = _arena_env_label(
 ARENA_BALANCED_PROVIDED_CAPACITY_PER_STORE: Final[float] = 300.0
 ARENA_BALANCED_CREDIT_LIMIT: Final[float] = 5000.0
 ARENA_BALANCED_OVERDRAFT_RATE: Final[float] = 0.03
-#
 # Explicit, named override of the lock-inherited writeoff ceiling: an amendment to the
 # lock is caught here instead of silently drifting the balanced world, and keeps
 # ARENA_BALANCED_ENV_LABEL (and therefore the default ladder_id) moving whenever this
 # knob does. Every other balanced knob stays as the lock has it.
 ARENA_BALANCED_WRITEOFF_FRAC_MAX: Final[float] = 0.05
 
-#
 ARENA_BALANCED_OVERHEAD_REFERENCE_STORES: Final[float] = 4.5
 
 ARENA_BALANCED_RESTRUCTURE_AFTER_TICKS: Final[int] = 50

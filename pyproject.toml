@@ -99,6 +99,16 @@ src = ["src", "tests"]
 # stray .py (e.g. a future build helper) is never linted with the simulator's rules.
 extend-exclude = ["frontend"]
 
+[tool.ruff.lint]
+# The project convention is ``ValueError`` for invalid values (pydantic, gym, and the
+# CLI all raise it); TRY004's preference for ``TypeError`` is a style call we decline.
+ignore = ["TRY004"]
+
+[tool.ruff.lint.per-file-ignores]
+# Typer's documented idiom passes ``typer.Option``/``typer.Argument`` calls as argument
+# defaults; B008 flags that pattern, so it is ignored for the CLI package only.
+"src/retail_simulator/app/cli/**" = ["B008"]
+
 [tool.mypy]
 python_version = "3.11"
 packages = ["retail_simulator"]
@@ -175,7 +185,7 @@ forbidden_modules = [
 [[tool.importlinter.contracts]]
 name = "app scenario models import only core"
 type = "forbidden"
-source_modules = ["retail_simulator.app.models", "retail_simulator.app.loader"]
+source_modules = ["retail_simulator.app.models"]
 forbidden_modules = [
     "retail_simulator.app.cli",
     "retail_simulator.envs",

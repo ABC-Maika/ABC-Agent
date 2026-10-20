@@ -296,7 +296,7 @@ def _default_head_to_head(
     caller pass extras like ``home_regions``. The closure's ``close`` attribute releases
     the shared env; it is ``None`` when ``env_factory`` is given. Heavy imports stay lazy.
     """
-    from retail_simulator.envs.league import (  # noqa: PLC0415
+    from retail_simulator.envs.league import (
         _position_controlled_head_to_head,
     )
 
@@ -321,7 +321,7 @@ def _default_head_to_head(
 
         return head_to_head_via_factory
 
-    from retail_simulator.envs.parallel_env import RetailParallelEnv  # noqa: PLC0415
+    from retail_simulator.envs.parallel_env import RetailParallelEnv
 
     env = RetailParallelEnv(config, n_learning_agents=2, seed=0)
 

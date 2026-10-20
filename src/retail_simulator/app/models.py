@@ -247,4 +247,38 @@ class ScenarioConfig(BaseModel):
         return cls(**data)
 
 
-__all__ = ["RegionSpec", "RewardWeights", "ScenarioConfig", "ValidationError"]
+class ScenarioValidationError(ValueError):
+    """A scenario YAML failed boundary validation; carries the aggregated operator-facing message."""
+
+
+def _format_validation_error(path: str | Path, exc: ValidationError) -> str:
+    """Render a pydantic ``ValidationError`` as one aggregated message, one line per problem."""
+    lines = [f"invalid scenario config at {path}:"]
+    for err in exc.errors():
+        loc = ".".join(str(part) for part in err["loc"]) or "<root>"
+        lines.append(f"  - {loc}: {err['msg']}")
+    return "\n".join(lines)
+
+
+def load_scenario(path: str | Path) -> CoreConfig:
+    """Load a scenario YAML and return its validated ``CoreConfig``.
+
+    Missing file → ``FileNotFoundError``; bad config → :class:`ScenarioValidationError`.
+    """
+    if not Path(path).exists():
+        raise FileNotFoundError(f"scenario file not found: {path}")
+    try:
+        scenario = ScenarioConfig.from_yaml(path)
+    except ValidationError as exc:
+        raise ScenarioValidationError(_format_validation_error(path, exc)) from exc
+    return scenario.to_core_config()
+
+
+__all__ = [
+    "RegionSpec",
+    "RewardWeights",
+    "ScenarioConfig",
+    "ScenarioValidationError",
+    "ValidationError",
+    "load_scenario",
+]

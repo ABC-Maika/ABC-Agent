@@ -1,9 +1,7 @@
 """Accounting engine: revenue, COGS, opex, profit, and cash.
 
-Turns the units sold by demand.resolve_demand into per-retailer financial
-outcomes and the next cash position, plus the per-region loyalty update.
-A pure ledger: it charges exactly the spend it is handed (affordability
-is clamped upstream in World.step). Never mutates state.
+Turns the units sold by demand.resolve_demand into per-retailer financial outcomes, the next
+cash position, and the per-region loyalty update. Pure ledger; never mutates state.
 """
 
 from __future__ import annotations
@@ -19,6 +17,13 @@ from retail_simulator.core.state import WorldState
 
 # Reference unit price; price_index is a multiplier on it.
 BASE_PRICE: float = 1.0
+
+
+def _as_float_array(
+    value: npt.NDArray[np.float64] | None, like: npt.NDArray[np.float64]
+) -> npt.NDArray[np.float64]:
+    """Coerce an optional [K] array to float64, defaulting to zeros shaped like ``like``."""
+    return np.zeros_like(like) if value is None else np.asarray(value, dtype=np.float64)
 
 
 @dataclass(frozen=True)
@@ -88,32 +93,18 @@ def apply_accounting(
     )
     marketing = np.asarray(demand_result.marketing_spend, dtype=np.float64)  # [K]
 
-    # Total capex = expansion + automation (both arrive pre-gated).
-    # gated by the affordability check (no double-application).
-    expansion_capex_arr = (
-        np.zeros_like(revenue) if capex is None else np.asarray(capex, dtype=np.float64)
-    )
-    automation_capex_arr = (
-        np.zeros_like(revenue)
-        if automation_capex is None
-        else np.asarray(automation_capex, dtype=np.float64)
-    )
+    # Total capex = expansion + automation; both arrive pre-gated by the
+    # affordability check (no double-application).
+    expansion_capex_arr = _as_float_array(capex, revenue)
+    automation_capex_arr = _as_float_array(automation_capex, revenue)
     capex_arr = expansion_capex_arr + automation_capex_arr
 
-    wage_bill_arr = (
-        np.zeros_like(revenue) if wage_bill is None else np.asarray(wage_bill, dtype=np.float64)
-    )
-    overhead_arr = (
-        np.zeros_like(revenue) if overhead is None else np.asarray(overhead, dtype=np.float64)
-    )
-    warehouse_spend_arr = (
-        np.zeros_like(revenue)
-        if warehouse_spend is None
-        else np.asarray(warehouse_spend, dtype=np.float64)
-    )
+    wage_bill_arr = _as_float_array(wage_bill, revenue)
+    overhead_arr = _as_float_array(overhead, revenue)
+    warehouse_spend_arr = _as_float_array(warehouse_spend, revenue)
     cash_budget_enabled = config.wage.cash_budget_enabled
-    # Any Phase-4 input (or a nonzero overdraft rate) takes the ledger path.
-    phase4_active = (
+    # Any ledger input (or a nonzero overdraft rate) takes the ledger path.
+    ledger_active = (
         wage_bill is not None
         or overhead is not None
         or cash_budget_enabled
@@ -123,13 +114,12 @@ def apply_accounting(
 
     # Negative-cash signal; empty on the default path.
     cash_negative = np.zeros(0, dtype=bool)
-    if not phase4_active:
+    if not ledger_active:
         # Default path (byte-identical float-op order).
         profit = revenue - cogs - opex - marketing
         new_cash = cash + profit - capex_arr
     else:
-        # Ledger path: nothing is scaled here; levers arrive pre-clamped.
-        # clamped, design note Q1) and capex is charged IN FULL, as gated.
+        # Ledger path: levers arrive pre-clamped and capex is charged in full, as gated.
         assortment_cost = config.assortment.assortment_cost_per_unit * assortment
         non_clamped_opex = research_cost + loyalty_program_cost
         opex = (

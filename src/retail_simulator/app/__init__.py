@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-from retail_simulator.app.loader import ScenarioValidationError, load_scenario
-from retail_simulator.app.models import ScenarioConfig
+from retail_simulator.app.models import ScenarioConfig, ScenarioValidationError, load_scenario
 
 __all__ = ["ScenarioConfig", "ScenarioValidationError", "load_scenario"]

@@ -227,7 +227,7 @@ def reward_variance_check(
         # The seam already exposes the un-normalized components in info; collect them directly.
         components = result.infos[_ARCHETYPE_SEAT]["components"]
         assert isinstance(components, dict)
-        for key in trajectories:
-            trajectories[key].append(float(components[key]))
+        for key, series in trajectories.items():
+            series.append(float(components[key]))
         state = result.next_state
     return reward_variance_balance(trajectories)

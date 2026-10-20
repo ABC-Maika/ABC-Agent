@@ -1,9 +1,7 @@
 """Reward model: profit-only primitive + the weighted/z-normalized reward.
 
-``compute_reward`` returns the agent's raw profit (the default reward).
-``RewardNormalizer`` z-normalizes each component against its running stats
-and applies the configured weights; it lives in ``WorldState`` so it
-serializes with the state and replays bit-for-bit.
+``RewardNormalizer`` z-normalizes each component against running stats and applies the
+configured weights; it lives in ``WorldState`` so it serializes and replays bit-for-bit.
 """
 
 from __future__ import annotations

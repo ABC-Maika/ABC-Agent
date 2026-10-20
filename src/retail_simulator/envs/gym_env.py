@@ -1,15 +1,10 @@
 """``RetailEnv`` — the Gymnasium single-agent view over the pure ``World`` seam.
 
-A thin adapter: constructs one ``World``, threads the latest ``WorldState``
-between calls, translates the agent's flat-Box action via
-``envs.action_wrapper``, and presents the Gymnasium 5-tuple. All world logic
-lives in ``core``.
-
-Episode boundaries are not modeled here: ``terminated`` is always ``False``
-(continuing world); apply ``TimeLimit`` externally via
-gym.make("RetailSim-v0", max_episode_steps=...). The info dict carries DX keys
-(awareness, marketing_spend, assortment, promotion, stockpile, ...), each
-derived from the same action the seam read.
+A thin adapter: one ``World`` with the latest ``WorldState`` threaded between calls, the agent's
+flat-Box action translated via the action helpers below, and the Gymnasium 5-tuple presented.
+``terminated`` is always ``False`` (a continuing world — apply ``TimeLimit`` externally); the info
+dict carries the per-lever DX keys derived from the action the seam read. All world logic lives in
+``core``.
 """
 
 from __future__ import annotations
@@ -22,14 +17,92 @@ import numpy.typing as npt
 from gymnasium.envs.registration import register
 
 from retail_simulator.core.config import CoreConfig
+from retail_simulator.core.encoding import (
+    OBS_DTYPE,
+    StructuredAction,
+    decode_action,
+    flatten_action_space_layout,
+)
 from retail_simulator.core.schema import ActionSchema, default_action_schema
 from retail_simulator.core.world import AGENT_INDEX, World, WorldState, compute_expansion_mask
-from retail_simulator.envs.action_wrapper import decode, mask_expansion_logits, to_core_action
 from retail_simulator.envs.info import enrich_agent_info
 from retail_simulator.envs.spaces import build_action_space, build_observation_space
 
 # The registered Gymnasium environment id.
 ENV_ID: str = "RetailSim-v0"
+
+
+# --------------------------------------------------------------------------- #
+# Flat-Box <-> structured action translation. Routes through                   #
+# core.encoding.decode_action (the single clipping/validation authority).      #
+# --------------------------------------------------------------------------- #
+
+
+def to_core_action(
+    action: npt.NDArray[np.float32] | list[float],
+    schema: ActionSchema | None = None,
+) -> npt.NDArray[np.float32]:
+    """Normalize a raw agent action into the flat float32 vector the seam takes.
+
+    Guarantees shape/dtype only; raises ``ValueError`` on a wrong-length action.
+    """
+    if schema is None:
+        schema = default_action_schema()
+    layout = flatten_action_space_layout(schema)
+
+    flat = np.asarray(action, dtype=OBS_DTYPE).ravel()
+    if flat.shape[0] != layout.total_dim:
+        raise ValueError(
+            f"action has flat length {flat.shape[0]}, expected {layout.total_dim} "
+            f"for schema v{schema.version}"
+        )
+    return flat
+
+
+def decode(
+    action: npt.NDArray[np.float32] | list[float],
+    schema: ActionSchema | None = None,
+) -> StructuredAction:
+    """Decode a raw agent action into validated, clipped structured levers."""
+    if schema is None:
+        schema = default_action_schema()
+    return decode_action(to_core_action(action, schema), schema)
+
+
+def mask_expansion_logits(
+    action: npt.NDArray[np.float32] | list[float] | tuple[float, ...],
+    expansion_mask: npt.NDArray[np.bool_],
+    schema: ActionSchema | None = None,
+) -> npt.NDArray[np.float32]:
+    """Mask illegal expansion slots by setting their logits to -inf."""
+    if schema is None:
+        schema = default_action_schema()
+    layout = flatten_action_space_layout(schema)
+    expansion_slot = layout.slot("expansion")
+
+    mask = np.asarray(expansion_mask)
+    if mask.dtype != np.bool_:
+        raise ValueError(
+            f"expansion_mask has dtype {mask.dtype}, expected bool — a non-bool "
+            "array is silently truthy-cast instead of validated, which can "
+            "misclassify a legal slot (e.g. a 0.0 entry, including hold) as illegal"
+        )
+    if mask.shape != (expansion_slot.width,):
+        raise ValueError(
+            f"expansion_mask has shape {mask.shape}, expected ({expansion_slot.width},) "
+            f"to match the schema's expansion lever block width"
+        )
+
+    flat = np.array(action, dtype=OBS_DTYPE).ravel()  # a COPY — never mutate the caller's array
+    if flat.shape[0] != layout.total_dim:
+        raise ValueError(
+            f"action has flat length {flat.shape[0]}, expected {layout.total_dim} "
+            f"for schema v{schema.version}"
+        )
+
+    block = flat[expansion_slot.offset : expansion_slot.offset + expansion_slot.width]
+    block[~mask] = -np.inf
+    return flat
 
 
 class RetailEnv(gym.Env[npt.NDArray[np.float32], npt.NDArray[np.float32]]):
@@ -39,7 +112,9 @@ class RetailEnv(gym.Env[npt.NDArray[np.float32], npt.NDArray[np.float32]]):
     seam by one tick with the agent seated at index 0.
     """
 
-    metadata: dict[str, Any] = {"render_modes": []}
+    # ``gym.Env`` declares ``metadata`` as a plain class attribute; ``ClassVar`` would
+    # override an instance variable (a mypy error), so keep the ecosystem convention.
+    metadata: dict[str, Any] = {"render_modes": []}  # noqa: RUF012
 
     def __init__(
         self,

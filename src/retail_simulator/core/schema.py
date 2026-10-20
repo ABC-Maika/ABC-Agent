@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from functools import lru_cache
+from functools import cache, lru_cache
 
 # Bump when the action layout changes in a way agents must be aware of (even pure tail appends).
 #
@@ -496,7 +496,7 @@ def _region_observation_block(r: int) -> tuple[ObservationField, ...]:
     )
 
 
-@lru_cache(maxsize=None)
+@cache
 def observation_schema(n_regions: int) -> tuple[ObservationField, ...]:
     """The observation layout for n_regions (base layout + one block per extra region)."""
     if n_regions <= 2:

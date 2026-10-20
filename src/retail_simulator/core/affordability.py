@@ -1,13 +1,8 @@
 """Affordability: how much of its intended spend each retailer can actually pay.
 
-``World.step`` (with the cash-budget gate on) decodes the levers, runs the
-capex gates in full, computes each retailer's intended discretionary spend,
-derives a per-retailer clamp in [0, 1], and scales the discretionary levers by
-it, so cost and demand effect move together. Capex is never scaled (a store
-you cannot fully pay for does not half-open); promotion is not scaled either
-(a variable cost of sales, funded per unit sold). With the gate off, every
-clamp is 1.0 and the pre-existing sequence runs untouched. Pure arithmetic,
-no RNG.
+With the cash-budget gate on, ``World.step`` derives a per-retailer clamp in [0, 1] and scales
+the discretionary levers by it so cost and demand effect move together; capex and promotion are
+never scaled. With the gate off, every clamp is 1.0 and the pre-existing sequence runs untouched.
 """
 
 from __future__ import annotations
@@ -158,7 +153,7 @@ def compute_spend_clamp(
 ) -> npt.NDArray[np.float64]:
     """Per-retailer clamp in [0, 1]: the affordable fraction of intended spend."""
     if credit_limit == 0.0:
-        # credit_limit == 0 keeps the original float-op order .
+        # credit_limit == 0 keeps the original float-op order.
         available = np.maximum(cash - committed_capex, 0.0)
     else:
         available = np.maximum(cash + credit_limit - committed_capex, 0.0)

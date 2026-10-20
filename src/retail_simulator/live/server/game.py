@@ -1,11 +1,11 @@
-"""The asyncio WebSocket server.
+"""The per-game live server: state machine, WebSocket handlers, and entry point.
 
-The third transport over the single ``World.step`` seam: hosts one
-:class:`RetailParallelEnv` per game, drives ``env.step`` on a wall-clock
-schedule, and accepts joint actions from N remote :class:`LiveClient`
-connections. The seam is called exactly once per tick; no economics are
-reimplemented here. One :func:`serve_game` call drives one game from
-registration through final scores.
+One :class:`_GameServer` per :func:`serve_game` invocation holds the env, the
+connected clients, the action-log writer, and the running per-seat reward
+accumulators. :func:`serve_game` drives one game end-to-end: registration
+window, per-tick broadcast/collect/step loop, final scores, manifest +
+action-log persistence. ``websockets`` is imported lazily inside
+:func:`serve_game` so ``import retail_simulator.live.server`` stays cheap.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import secrets
 import time
 import uuid
@@ -24,11 +23,10 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import numpy.typing as npt
 
-import retail_simulator
 from retail_simulator.core.config import CoreConfig
 from retail_simulator.core.schema import ACTION_SCHEMA_VERSION
 from retail_simulator.envs.parallel_env import RetailParallelEnv
-from retail_simulator.live._permutation import permute_actions_by_seat
+from retail_simulator.live.play import permute_actions_by_seat
 from retail_simulator.live.protocol import (
     PROTOCOL_VERSION,
     REGISTRY_DEFAULT_ACTION,
@@ -40,7 +38,22 @@ from retail_simulator.live.protocol import (
     SeatAssigned,
     from_json_any,
 )
-from retail_simulator.live.replay import ActionLogRecord, ReplayManifest
+from retail_simulator.live.replay import ActionLogRecord
+from retail_simulator.live.server.config import (
+    ServeConfig,
+    ServeResult,
+    _ClientState,
+    _coerce_components,
+    _flatten_action_mask,
+    _jsonsafe_info,
+)
+from retail_simulator.live.server.replay import (
+    _ActionLogWriter,
+    _atomic_write_text,
+    _build_manifest,
+    _compute_wall_clock_variance,
+    _compute_winner,
+)
 
 if TYPE_CHECKING:
     # Type-only import; ``websockets`` is paid for only inside serve_game. The symbol moved
@@ -49,161 +62,6 @@ if TYPE_CHECKING:
     from websockets.server import WebSocketServerProtocol  # noqa: F401
 
 _log = logging.getLogger("retail_simulator.live.server")
-
-# ---------------------------------------------------------------------------- #
-# Public dataclasses
-# ---------------------------------------------------------------------------- #
-
-
-@dataclass(frozen=True)
-class ServeConfig:
-    """Configuration for one live game; built by the CLI and handed to :func:`serve_game`.
-
-    All fields are required so the CLI surfaces every operator choice. ``token=None``
-    is ``--no-auth``; ``tick_interval_seconds=0.0`` is CI fast mode;
-    ``npc_archetypes=()`` is the all-remote mode.
-    """
-
-    n_agents: int
-    n_ticks: int
-    tick_interval_seconds: float
-    host: str
-    port: int
-    registration_timeout_seconds: float
-    token: str | None
-    npc_archetypes: tuple[str, ...]
-    scenario_name: str
-    runs_dir: Path
-    seed: int
-
-
-@dataclass(frozen=True)
-class ServeResult:
-    """Outcome of one :func:`serve_game` call.
-
-    ``exit_status`` mirrors a Unix exit code: ``0`` clean game, ``1`` registration
-    timeout, ``2`` any other unrecoverable error.
-    """
-
-    game_id: str
-    run_dir: Path
-    rounds_completed: int
-    exit_status: int
-    summary: str
-    final_scores: dict[str, float] = field(default_factory=dict)
-    winner_seat: int | None = None
-
-
-# ---------------------------------------------------------------------------- #
-# Internal per-connection state
-# ---------------------------------------------------------------------------- #
-
-
-@dataclass
-class _ClientState:
-    """Per-connection mutable state held by the server during one game (keyed by seat_index).
-
-    ``websocket`` is typed ``Any``: the websockets server protocol class is only
-    imported under :data:`TYPE_CHECKING`.
-    """
-
-    seat_index: int
-    websocket: Any  # WebSocketServerProtocol; ``Any`` keeps the runtime import lazy.
-    client_name: str | None
-    agent_name: str
-    last_valid_action: npt.NDArray[np.float32] | None = None
-    missed_deadlines: int = 0
-
-
-# ---------------------------------------------------------------------------- #
-# Helpers — action-log writer, JSON helpers, manifest persistence
-# ---------------------------------------------------------------------------- #
-
-
-def _atomic_write_text(path: Path, text: str) -> None:
-    """Write ``text`` to ``path`` atomically (sibling ``.tmp`` + ``os.replace``: a crash leaves either the prior or the new contents, never a partial file)."""
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
-
-
-def _flatten_action_mask(action_mask: Any) -> list[float] | None:
-    """Flatten the seam's per-lever ``action_mask`` dict into the wire's flat list.
-
-    Concatenates the per-key arrays in sorted-key order (deterministic layout).
-    Returns ``None`` if the seam's mask is ``None``.
-    """
-    if action_mask is None:
-        return None
-    if not isinstance(action_mask, dict):
-        # Defensive: a future seam revision might emit a flat array. Coerce.
-        return [float(x) for x in np.asarray(action_mask).ravel()]
-    flat: list[float] = []
-    for key in sorted(action_mask.keys()):
-        arr = np.asarray(action_mask[key]).ravel()
-        flat.extend(float(x) for x in arr)
-    return flat
-
-
-def _coerce_components(info: dict[str, Any]) -> dict[str, float]:
-    """Pull the reward ``components`` dict out of the seam's info and coerce to floats."""
-    raw = info.get("components")
-    if not isinstance(raw, dict):
-        return {}
-    return {str(k): float(v) for k, v in raw.items()}
-
-
-def _jsonsafe_info(info: dict[str, Any]) -> dict[str, Any]:
-    """Strip the seam's info dict of non-JSON-safe values for the wire.
-
-    Drops ``action_mask`` and ``components`` (they have dedicated wire fields),
-    coerces numpy scalars to Python types, and silently drops anything else — the
-    wire is for display, not authority.
-    """
-    safe: dict[str, Any] = {}
-    for key, value in info.items():
-        if key in ("action_mask", "components"):
-            continue
-        if isinstance(value, (str, bool, int)) and not isinstance(value, np.bool_):
-            safe[key] = value
-        elif isinstance(value, float):
-            safe[key] = float(value)
-        elif isinstance(value, np.floating):
-            safe[key] = float(value)
-        elif isinstance(value, np.integer):
-            safe[key] = int(value)
-        elif isinstance(value, np.bool_):
-            safe[key] = bool(value)
-        elif value is None:
-            safe[key] = None
-        # Else: silently drop unsupported types — the wire is operator-display; structured data
-        # goes through the protocol's dedicated fields.
-    return safe
-
-
-class _ActionLogWriter:
-    """Per-tick JSONL action-log writer (append + flush per record)."""
-
-    def __init__(self, path: Path) -> None:
-        self._path = path
-        # Line-buffered text mode + explicit flush per write: a crash leaves complete lines.
-        self._fh = path.open("a", encoding="utf-8", buffering=1)
-
-    def write_record(self, record: ActionLogRecord) -> None:
-        """Serialize one record + append + flush. Used per tick."""
-        self._fh.write(record.to_json() + "\n")
-        self._fh.flush()
-
-    def close(self) -> None:
-        """fsync + close; safe to call once."""
-        try:
-            os.fsync(self._fh.fileno())
-        except OSError:
-            # fsync may not be supported on every filesystem (e.g. tmpfs in some
-            # CI containers); the explicit flush above already pushed the data.
-            pass
-        self._fh.close()
-
 
 # ---------------------------------------------------------------------------- #
 # The server class — internal; not exported
@@ -250,17 +108,20 @@ class _GameServer:
 
 
 async def _send_error_and_close(websocket: Any, error_kind: str, message: str) -> None:
-    """Send an :class:`ErrorMessage` and close the connection (best-effort; swallows ConnectionClosed)."""
+    """Send an :class:`ErrorMessage` and close the connection.
+
+    Best-effort: swallows connection errors (the peer may already be gone).
+    """
     try:
         await websocket.send(
             ErrorMessage(error_kind=error_kind, message=message, recoverable=False).to_json()
         )
-    except Exception:
+    except Exception:  # noqa: BLE001
         # The peer may already have closed; nothing more we can do.
         _log.debug("failed to send ErrorMessage(%s) — peer may be gone", error_kind)
     try:
         await websocket.close()
-    except Exception:
+    except Exception:  # noqa: BLE001
         _log.debug("failed to close peer cleanly after ErrorMessage(%s)", error_kind)
 
 
@@ -280,11 +141,11 @@ async def _handle_registration(
     # 1. Read the Hello frame under a short timeout.
     try:
         raw = await asyncio.wait_for(websocket.recv(), timeout=hello_timeout_seconds)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         await _send_error_and_close(websocket, "hello_timeout", "no Hello within timeout")
         _log.warning("registration: peer did not send Hello within %.1fs", hello_timeout_seconds)
         return
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         _log.warning("registration: error reading Hello frame: %s", exc)
         return
 
@@ -376,7 +237,7 @@ async def _handle_registration(
     )
     try:
         await websocket.send(seat_assigned.to_json())
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         _log.warning("registration: failed to send SeatAssigned to seat %d: %s", seat_index, exc)
         return
     _log.info(
@@ -410,9 +271,9 @@ async def _receive_action_for_seat(
     """
     try:
         raw = await asyncio.wait_for(client.websocket.recv(), timeout=timeout_seconds)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         _log.warning(
             "seat %d: connection error during action recv at tick %d: %s",
             client.seat_index,
@@ -462,10 +323,9 @@ async def _collect_actions_for_tick(
     its own task so a slow seat does not block a fast one.
     """
     arrived: dict[int, npt.NDArray[np.float32]] = {}
-    if deadline_seconds <= 0.0:
-        # Fast mode (--tick-interval=0): give each seat one zero-timeout opportunity so an
-        # action that arrived during the prior broadcast still lands; do not block.
-        deadline_seconds = 0.0
+    # Fast mode (--tick-interval=0): give each seat one zero-timeout opportunity so an
+    # action that arrived during the prior broadcast still lands; do not block.
+    deadline_seconds = max(0.0, deadline_seconds)
     tasks = [
         asyncio.create_task(_receive_action_for_seat(client, tick, max(deadline_seconds, 0.0)))
         for client in server.clients.values()
@@ -489,46 +349,13 @@ async def _collect_actions_for_tick(
 # ---------------------------------------------------------------------------- #
 
 
-def _build_manifest(server: _GameServer, started_at_iso: str) -> ReplayManifest:
-    """Snapshot the game inputs into a :class:`ReplayManifest`."""
-    return ReplayManifest(
-        game_id=server.game_id,
-        seed=server.config.seed,
-        n_agents=server.config.n_agents,
-        npc_archetypes=server.config.npc_archetypes,
-        n_ticks=server.config.n_ticks,
-        started_at_iso=started_at_iso,
-        schema_version=ACTION_SCHEMA_VERSION,
-        software_version=retail_simulator.__version__,
-    )
-
-
-def _compute_winner(cumulative_score_per_seat: dict[int, float]) -> int | None:
-    """Return the seat with the strictly-highest score, or ``None`` on tie/empty."""
-    if not cumulative_score_per_seat:
-        return None
-    sorted_scores = sorted(cumulative_score_per_seat.items(), key=lambda kv: kv[1], reverse=True)
-    if len(sorted_scores) >= 2 and sorted_scores[0][1] == sorted_scores[1][1]:
-        return None
-    return sorted_scores[0][0]
-
-
-def _compute_wall_clock_variance(samples: list[float], tick_interval_seconds: float) -> float:
-    """Std-dev of per-tick elapsed times divided by the configured interval.
-
-    Returns ``0.0`` in fast mode or when there are fewer than 2 samples.
-    """
-    if tick_interval_seconds <= 0.0:
-        return 0.0
-    if len(samples) < 2:
-        return 0.0
-    return float(np.std(samples) / tick_interval_seconds)
-
-
 async def _broadcast_observation(
     server: _GameServer, tick: int, seat: int, deadline_ns: int
 ) -> None:
-    """Send one :class:`ObservationMessage` to one connected client; a broken peer just misses its tick."""
+    """Send one :class:`ObservationMessage` to one connected client.
+
+    A broken peer just misses its tick.
+    """
     client = server.clients[seat]
     agent_id = server.agent_ids[seat]
     obs_array = server.current_obs[agent_id]
@@ -548,7 +375,7 @@ async def _broadcast_observation(
     )
     try:
         await client.websocket.send(message.to_json())
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         _log.warning(
             "broadcast: failed to send observation to seat %d at tick %d: %s",
             seat,
@@ -635,7 +462,7 @@ async def serve_game(config: ServeConfig) -> ServeResult:
                 server.registration_complete.wait(),
                 timeout=config.registration_timeout_seconds,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             connected = len(server.clients)
             _log.warning(
                 "serve: registration timeout (%d/%d clients connected after %.1fs)",
@@ -667,7 +494,8 @@ async def serve_game(config: ServeConfig) -> ServeResult:
         # ---- 4. Per-tick loop.
         game_start_monotonic = time.monotonic()
         tick_interval = config.tick_interval_seconds
-        # Per-tick action deadline = 80% of the tick interval (leaves 20% to step + broadcast); 0 in fast mode.
+        # Per-tick action deadline = 80% of the tick interval (leaves 20% to step +
+        # broadcast); 0 in fast mode.
         per_tick_deadline_seconds = tick_interval * 0.8 if tick_interval > 0 else 0.0
 
         for tick in range(config.n_ticks):
@@ -797,7 +625,7 @@ async def serve_game(config: ServeConfig) -> ServeResult:
         for client in list(server.clients.values()):
             try:
                 await client.websocket.send(final_payload)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 _log.warning(
                     "final: failed to send FinalScores to seat %d: %s",
                     client.seat_index,
@@ -820,7 +648,7 @@ async def serve_game(config: ServeConfig) -> ServeResult:
         for client in list(server.clients.values()):
             try:
                 await client.websocket.close()
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
 
         winner_label = f"seat_{winner_seat}" if winner_seat is not None else "tie"
@@ -836,7 +664,7 @@ async def serve_game(config: ServeConfig) -> ServeResult:
             winner_seat=winner_seat,
         )
 
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         _log.exception("serve: unhandled error during game %s", game_id)
         exit_status = 2
         summary = f"game {game_id} aborted: {exc}"
@@ -861,8 +689,5 @@ async def serve_game(config: ServeConfig) -> ServeResult:
             ws_server.close()
             try:
                 await ws_server.wait_closed()
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
-
-
-__all__ = ["ServeConfig", "ServeResult", "serve_game"]

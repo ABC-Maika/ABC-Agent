@@ -8,7 +8,7 @@ The default construction (``n_learning_agents=2``, ``npc_archetypes=()``) is a
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any
+from typing import Any, ClassVar
 
 import gymnasium as gym
 import numpy as np
@@ -18,7 +18,7 @@ from pettingzoo import ParallelEnv
 from retail_simulator.core.config import CoreConfig, SeatSpec
 from retail_simulator.core.schema import ActionSchema, default_action_schema
 from retail_simulator.core.world import World, WorldState, compute_expansion_mask
-from retail_simulator.envs.action_wrapper import decode, mask_expansion_logits, to_core_action
+from retail_simulator.envs.gym_env import decode, mask_expansion_logits, to_core_action
 from retail_simulator.envs.info import enrich_agent_info
 from retail_simulator.envs.spaces import build_action_space, build_observation_space
 
@@ -42,7 +42,7 @@ class RetailParallelEnv(ParallelEnv):
     un-normalized reward ``components``, and DX flat metric keys.
     """
 
-    metadata: dict[str, Any] = {"name": "retail_sim_parallel_v0", "render_modes": []}
+    metadata: ClassVar[dict[str, Any]] = {"name": "retail_sim_parallel_v0", "render_modes": []}
 
     def __init__(
         self,
@@ -257,7 +257,7 @@ class RetailParallelEnv(ParallelEnv):
         # Stash the raw per-seat infos (all seats, incl. NPCs) for hot-seat scoring.
         self._last_raw_infos = result.infos
 
-        # 3. Slice the seam's per-retailer outputs into per-agent dicts (no recomputation).
+        # 3. Split the seam's per-retailer outputs into per-agent dicts (no recomputation).
         observations: dict[str, npt.NDArray[np.float32]] = {}
         rewards: dict[str, float] = {}
         terminations: dict[str, bool] = {}
@@ -311,8 +311,8 @@ class RetailParallelEnv(ParallelEnv):
 
     def render(self) -> None:
         """No-op render (no render modes are supported)."""
-        return None
+        return
 
     def close(self) -> None:
         """No-op close (the env holds no external resources)."""
-        return None
+        return

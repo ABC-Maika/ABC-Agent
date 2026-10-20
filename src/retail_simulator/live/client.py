@@ -221,7 +221,7 @@ class LiveClient:
         self._connection = None
         try:
             await connection.close()
-        except Exception:  # noqa: BLE001  # intentional: cleanup must not raise
+        except Exception:  # intentional: cleanup must not raise
             # Swallowed: if the peer already tore down the socket, close() may raise;
             # the surrounding exception (if any) is the real one to surface.
             logger.debug("LiveClient._safe_close: ignored exception during close", exc_info=True)

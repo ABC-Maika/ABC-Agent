@@ -1,8 +1,9 @@
-"""Four CLOSED-LOOP geographic archetypes stressing the arena's geography axis (S5).
+"""Four closed-loop geographic archetypes stressing the arena's geography axis.
 
-Only the ``expansion`` target is closed-loop; every other lever is a fixed per-archetype constant borrowed from :mod:`retail_simulator.envs.spike_archetypes`'s vetted anchors. Region 0 (the arena's deliberately stranded slot) is never a candidate in any rule — every scan starts at region 1.
-
-Layer note: pure ``core`` reads only (encoding/schema/config) — no envs, no RL framework, no network.
+Only the ``expansion`` target is closed-loop; every other lever is a fixed per-archetype constant
+borrowed from :mod:`retail_simulator.envs.spike_archetypes`'s vetted anchors. Region 0 (the arena's
+deliberately stranded slot) is never a candidate — every scan starts at region 1. Pure ``core`` reads
+only (encoding/schema/config): no envs, no RL framework, no network.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from retail_simulator.core.config import RegionConfig
 from retail_simulator.core.encoding import StructuredAction, encode_action
 from retail_simulator.core.schema import N_AUTOMATION_TIERS, observation_schema
 
-# Canonical archetype labels (the tournament node ids for scripts/phase6_geo_tournament.py).
+# Canonical archetype labels (the tournament node ids).
 SPRAWLER: str = "sprawler"
 FORTRESS: str = "fortress"
 CHERRY_PICKER: str = "cherry-picker"

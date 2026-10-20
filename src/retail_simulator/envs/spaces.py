@@ -1,7 +1,7 @@
 """Build Gymnasium Spaces from the core schema (single source of truth).
 
-The flat layout is owned by ``core``; this module turns it into concrete Box
-spaces so the adapter never hardcodes a dimension or offset.
+The flat layout is owned by ``core``; this module turns it into concrete Box spaces so the
+adapter never hardcodes a dimension or offset.
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ from retail_simulator.core.schema import (
     ActionSchema,
     LeverKind,
     ObservationField,
-    ObservationGroup,
     default_action_schema,
     observation_schema,
 )
@@ -98,8 +97,7 @@ def _observation_field_bounds(
         # Both sit within the pricing bounds (no absent-competitor sentinel).
         return (price_low, price_high)
     if field.name in ("awareness", "competitor_awareness"):
-        # Awareness is capped at 1/decay by the recurrence clip, so [0, 1/decay] is the tight bound.
-        # fallback (env_checker/SB3 prefer tight finite bounds for stability).
+        # Capped at 1/decay by the recurrence clip — a tight finite bound (env_checker/SB3 prefer it).
         return (0.0, 1.0 / config.marketing.decay)
     if field.name in (
         "assortment",
@@ -108,7 +106,6 @@ def _observation_field_bounds(
         "competitor_promotion",
     ):
         # Fractions in [0, 1] (the levers' action bounds).
-        # fallback.
         return _SHARE_BOUNDS
     if field.name == "research_fidelity":
         # fidelity = spend / (spend + k) saturates in [0, 1).
@@ -138,17 +135,13 @@ def _observation_field_bounds(
         "last_revenue",
         "total_regional_demand",
         "stores",
-        # Wage actually paid last tick: unbounded-above money magnitude like cash.
-        # revenue, so it shares the same generous non-negative bound.
+        # Wage actually paid last tick: an unbounded-above money magnitude like cash.
         "wage_level",
     ):
         # Per-region demand/other-present fields share this bound via the region-role path.
         return (0.0, _MONETARY_BOUND)
 
-    # Fallback: SELF/MARKET magnitudes get the generous bound, so no field is ever unbounded.
-    # unknown field is never left unbounded.
-    if field.group in (ObservationGroup.SELF, ObservationGroup.MARKET):
-        return (0.0, _MONETARY_BOUND)
+    # Fallback: any unlisted field gets the generous bound, so no field is ever unbounded.
     return (0.0, _MONETARY_BOUND)
 
 
@@ -175,7 +168,7 @@ def build_action_space(schema: ActionSchema | None = None) -> spaces.Box:
     """Build the flat action Box from the enabled levers.
 
     Continuous levers contribute their [low, high]; discrete levers contribute a
-    logits block (argmax-decoded by ``action_wrapper``).
+    logits block (argmax-decoded by ``gym_env``).
     """
     if schema is None:
         schema = default_action_schema()

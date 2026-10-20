@@ -6,7 +6,7 @@ Harness layer; no schema bump (v10 UNCHANGED), no new RNG in core, no obs/action
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, runtime_checkable
 
 import numpy as np
 import numpy.typing as npt
@@ -276,13 +276,16 @@ def build_curriculum(name: str, base_config: CoreConfig | None = None) -> Scenar
 # pettingzoo's ParallelEnv is the base class SuperSuit's bridge requires via an isinstance
 # check (it does not duck-type); inheriting it makes the wrapper a first-class PettingZoo
 # Parallel env. The module-top import is the documented, stable pattern.
-from pettingzoo import ParallelEnv  # noqa: E402 - kept near the wrapper for locality
+from pettingzoo import ParallelEnv
 
 
 class CurriculumEnvWrapper(ParallelEnv):  # type: ignore[misc, unused-ignore]
     """PettingZoo Parallel wrapper that resamples a scenario (rebuilding the env) on every reset."""
 
-    metadata: dict[str, Any] = {"name": "retail_sim_curriculum_parallel_v0", "render_modes": []}
+    metadata: ClassVar[dict[str, Any]] = {
+        "name": "retail_sim_curriculum_parallel_v0",
+        "render_modes": [],
+    }
 
     def __init__(
         self,
@@ -325,7 +328,7 @@ class CurriculumEnvWrapper(ParallelEnv):  # type: ignore[misc, unused-ignore]
         self._last_scenario: CoreConfig = first_config
 
     @property
-    def unwrapped(self) -> "CurriculumEnvWrapper":
+    def unwrapped(self) -> CurriculumEnvWrapper:
         """The "innermost" env — we are the outermost wrapper, so return self.
 
         The inner RetailParallelEnv is rebuilt every reset(), so returning it would leak a stale reference; the wrapper IS the env the bridge sees.
@@ -516,10 +519,9 @@ def _evaluate_policy_in_config(
     seed: int,
 ) -> float:
     """Mean stationary episode score of a policy in one scenario config."""
-    from retail_simulator.envs.parallel_gate import _episode_stationary_score
-
     # Lazy import: the parallel env pulls pettingzoo (a 1.5+s import).
     from retail_simulator.envs.parallel_env import RetailParallelEnv
+    from retail_simulator.envs.parallel_gate import _episode_stationary_score
 
     cfg = config.reward
     env = RetailParallelEnv(
@@ -600,11 +602,11 @@ def evaluate_generalization(
 
 
 __all__ = [
-    "CurriculumEnvWrapper",
-    "GeneralizationReport",
     "PHASE_1_4_BARGAIN_SEEKER_PROFILE",
     "PHASE_1_4_BASIC_CURRICULUM_NAME",
     "PHASE_1_4_PREMIUM_HUNTER_PROFILE",
+    "CurriculumEnvWrapper",
+    "GeneralizationReport",
     "RecipeIVRegressionResult",
     "ScenarioDistribution",
     "UniformScenarioDistribution",

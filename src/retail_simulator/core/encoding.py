@@ -92,7 +92,7 @@ def _competitors(state: WorldState) -> list[RetailerState]:
 
 
 def true_competitor_view(state: WorldState, agent_index: int) -> PerceivedCompetitor:
-    """ """
+    """The competitor block the agent sees — the first competitor's true state, padded with extra regions."""
     del agent_index  # the single competitor block is observer-independent in 1.0
     competitors = _competitors(state)
     first_competitor = competitors[0] if competitors else None
@@ -102,7 +102,7 @@ def true_competitor_view(state: WorldState, agent_index: int) -> PerceivedCompet
 def _true_competitor_view(
     first_competitor: RetailerState | None, n_regions: int
 ) -> PerceivedCompetitor:
-    """ """
+    """Build the perceived competitor view from the first competitor's true state."""
     n_extra = max(0, n_regions - 2)
     if first_competitor is None:
         return PerceivedCompetitor(
@@ -140,7 +140,7 @@ def _true_competitor_view(
 
 
 def encode_observation(state: WorldState, agent_index: int) -> npt.NDArray[np.float32]:
-    """ """
+    """Encode the agent's flat float32 observation vector from the world state."""
     me = state.retailers[agent_index]
     competitors = _competitors(state)
     n_regions = len(state.regions)
@@ -233,7 +233,7 @@ def encode_observation(state: WorldState, agent_index: int) -> npt.NDArray[np.fl
 
 
 def _others_present(state: WorldState, agent_index: int, r: int) -> float:
-    """ """
+    """The fraction of the agent's other competitors present in region ``r``."""
     return float(
         sum(
             1
@@ -250,7 +250,7 @@ def _extra_region_values(
     perceived: PerceivedCompetitor,
     r: int,
 ) -> dict[str, float]:
-    """ """
+    """Perceived values (awareness, loyalty, share, mean price) for an extra region."""
     extra_idx = r - 2
     if 0 <= extra_idx < len(perceived.extra_regions):
         comp_awareness, comp_loyalty, comp_share, comp_mean_price = perceived.extra_regions[

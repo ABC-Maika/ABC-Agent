@@ -18,8 +18,6 @@ from retail_simulator.core.config import CoreConfig
 from retail_simulator.core.encoding import decode_action
 from retail_simulator.core.state import WorldState
 from retail_simulator.core.world import compute_expansion_mask
-from retail_simulator.envs.action_wrapper import mask_expansion_logits
-from retail_simulator.envs.parallel_env import RetailParallelEnv
 from retail_simulator.envs.arena import (
     ARENA_BALANCED_ENV_LABEL,
     ARENA_ENV_LABEL,
@@ -29,7 +27,9 @@ from retail_simulator.envs.arena import (
     arena_lock_config,
 )
 from retail_simulator.envs.geo_archetypes import GEO_ARCHETYPE_LABELS, geo_archetypes
+from retail_simulator.envs.gym_env import mask_expansion_logits
 from retail_simulator.envs.ladder import _materialize_predicts
+from retail_simulator.envs.parallel_env import RetailParallelEnv
 
 # The levers every consumer records, in the order the study's CSV writes them;
 # re-exported by scripts/arena_competition.py so its CLI contract is unchanged.
@@ -361,7 +361,7 @@ class ArenaMatch:
 
     def _state(self) -> WorldState:
         """The live world state — this seam's own subject, so the private read is deliberate."""
-        state = self._env._state  # noqa: SLF001 — see the docstring
+        state = self._env._state
         if state is None:  # pragma: no cover — the constructor resets the env
             raise RuntimeError("the arena env has no world state; it was never reset")
         return state

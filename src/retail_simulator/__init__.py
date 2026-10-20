@@ -15,8 +15,8 @@ __version__ = "0.1.0"
 __all__ = ["RetailEnv", "RetailParallelEnv", "ScenarioConfig", "__version__"]
 
 if TYPE_CHECKING:  # import only for type-checkers; never at runtime import time
-    from retail_simulator.envs import RetailEnv, RetailParallelEnv
     from retail_simulator.app import ScenarioConfig
+    from retail_simulator.envs import RetailEnv, RetailParallelEnv
 
 
 def register_environments() -> bool:

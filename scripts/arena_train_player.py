@@ -231,7 +231,7 @@ def _load_driver() -> ModuleType:
     """Import the league driver, which lives beside this script rather than in the package."""
     if str(_SCRIPTS_DIR) not in sys.path:
         sys.path.insert(0, str(_SCRIPTS_DIR))
-    import phase4_rl_confirm  # noqa: PLC0415
+    import phase4_rl_confirm
 
     return phase4_rl_confirm
 

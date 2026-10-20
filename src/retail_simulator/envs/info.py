@@ -136,6 +136,5 @@ def enrich_agent_info(
         }
     )
     # action_mask is computed by the seam and carried in base_info; setdefault never overwrites it.
-    # overwrites the seam's authoritative mask.
     info.setdefault("action_mask", None)
     return info

@@ -41,6 +41,8 @@ from retail_simulator.live.server import ServeConfig, ServeResult, serve_game
 
 
 __all__ = [
+    "PROTOCOL_VERSION",
+    "REGISTRY_DEFAULT_ACTION",
     "ActionLogRecord",
     "ActionMessage",
     "ErrorMessage",
@@ -48,9 +50,6 @@ __all__ = [
     "Hello",
     "LiveClient",
     "ObservationMessage",
-    "PROTOCOL_VERSION",
-    "REGISTRY_DEFAULT_ACTION",
-    "play_one_game",
     "ReplayManifest",
     "ReplayResult",
     "SeatAssigned",
@@ -59,10 +58,11 @@ __all__ = [
     "ServeConfig",
     "ServeResult",
     "from_json_any",
-    "run_series",
+    "play_one_game",
     "read_action_log",
     "read_manifest",
     "replay_game_dir",
     "run_replay",
+    "run_series",
     "serve_game",
 ]

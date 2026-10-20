@@ -1,7 +1,6 @@
 """World state data structures — plain data, no behavior.
 
-``(WorldState, rng.bit_generator.state)`` fully serializes the sim for replay
-and checkpointing. Only ``world.py`` advances a ``WorldState``.
+``(WorldState, rng.bit_generator.state)`` fully serializes the sim; only ``world.py`` advances it.
 """
 
 from __future__ import annotations
@@ -160,7 +159,6 @@ class RetailerState:
     # cash recovers (a restructuring also resets it).
     insolvent_ticks: int = 0
     # Count of restructurings this episode (reporting-only).
-    # template — never read by any economic array).
     restructurings: int = 0
     # NPC seat's pending flat action: decided last tick, consumed this tick
     # (the same one-tick lag as price; no is_npc branch downstream). None for
