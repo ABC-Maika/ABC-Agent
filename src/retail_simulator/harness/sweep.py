@@ -28,12 +28,12 @@ from retail_simulator.core.state import (
 )
 from retail_simulator.core.world import AGENT_INDEX, World
 
-      # Obs index of the perceived competitor price (read from the schema, never hardcoded): the
-      # reactive research heuristic best-responds to this noised read.
+# Obs index of the perceived competitor price (read from the schema, never hardcoded): the
+# reactive research heuristic best-responds to this noised read.
 _COMPETITOR_PRICE_OBS_NAME: str = "competitor_price"
 
-      # Default sweep resolution / horizon: a modest grid keeps the 2-D cell count affordable;
-      # ticks_per_point ticks per (cell, seed) average out the demand noise.
+# Default sweep resolution / horizon: a modest grid keeps the 2-D cell count affordable;
+# ticks_per_point ticks per (cell, seed) average out the demand noise.
 DEFAULT_GRID_POINTS: int = 11
 DEFAULT_TICKS_PER_POINT: int = 1000
 DEFAULT_SEEDS: tuple[int, ...] = (0, 1, 2)
@@ -54,8 +54,8 @@ PINNED_ASSORTMENT: float = 0.5
 
 PINNED_PROMOTION: float = 0.3
 
-      # A clear optimum must beat the comparison cell by more than this multiple of the per-point
-      # standard error to count as a real (non-noise) win. ~3 sigma.
+# A clear optimum must beat the comparison cell by more than this multiple of the per-point
+# standard error to count as a real (non-noise) win. ~3 sigma.
 MARGIN_SIGMA_MULTIPLE: float = 3.0
 
 # Floating-point tolerance for classifying a grid point as a boundary value.
@@ -68,13 +68,13 @@ DEFAULT_EXPANSION_TIMINGS: tuple[int, ...] = (0, 10, 26, 52)
 # Sentinel ``T`` for the never-expand baseline row (a policy that never opens).
 NEVER_EXPAND_T: int = -1
 
-      # A timing curve is NON-flat only if the best T beats the WORST expand-at-T by > this multiple
-      # of their combined std-error (reuses the shared sigma multiple).
+# A timing curve is NON-flat only if the best T beats the WORST expand-at-T by > this multiple
+# of their combined std-error (reuses the shared sigma multiple).
 TIMING_FLAT_SIGMA_MULTIPLE: float = MARGIN_SIGMA_MULTIPLE
 
-      # Research (fidelity) sweep range — the research lever's action bounds. The axis maps a
-      # research SPEND in [0, 1] through the config's saturating fidelity mapping; the verdict
-      # reasons about the SPEND axis, reporting the resulting fidelity.
+# Research (fidelity) sweep range — the research lever's action bounds. The axis maps a
+# research SPEND in [0, 1] through the config's saturating fidelity mapping; the verdict
+# reasons about the SPEND axis, reporting the resulting fidelity.
 RESEARCH_LOW: float = 0.0
 RESEARCH_HIGH: float = 1.0
 
@@ -89,8 +89,8 @@ RESEARCH_GATE_BETA_REFERENCE: float = 1.5
 SERVICE_LOW: float = 0.0
 SERVICE_HIGH: float = 1.0
 
-      # Default SCM-axis grid: 11 points over [0, 1]; the endpoints are load-bearing (the
-      # 'pinned at extreme' classification requires 0.0 and 1.0 in the grid).
+# Default SCM-axis grid: 11 points over [0, 1]; the endpoints are load-bearing (the
+# 'pinned at extreme' classification requires 0.0 and 1.0 in the grid).
 DEFAULT_SERVICE_LEVELS: tuple[float, ...] = tuple(round(0.1 * i, 2) for i in range(11))
 
 SCM_GATE_COGS_PREMIUM: float = 0.10
@@ -113,8 +113,8 @@ RAMP_POLICY_T: int = -2
 LOYALTY_LOW: float = 0.0
 LOYALTY_HIGH: float = 1.0
 
-      # Default loyalty-spend grid: 11 points over [0, 1]; the endpoints are load-bearing (the
-      # 'pinned at extreme' classification requires 0.0 and 1.0).
+# Default loyalty-spend grid: 11 points over [0, 1]; the endpoints are load-bearing (the
+# 'pinned at extreme' classification requires 0.0 and 1.0).
 DEFAULT_LOYALTY_SPENDS: tuple[float, ...] = tuple(round(0.1 * i, 2) for i in range(11))
 
 LOYALTY_GATE_COST_PER_UNIT_SPEND: float = 25.0
