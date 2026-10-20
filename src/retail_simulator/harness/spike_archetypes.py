@@ -1,15 +1,6 @@
-"""Each ``make_*`` returns a ``predict(obs, *, episode_start=bool) -> np.ndarray(44,)
-float32`` closure matching the F-MATERIALIZE-API=A contract the head-to-head primitive
-drives (:func:`retail_simulator.harness.league._head_to_head_episode_scores` passes
-``episode_start`` and the action is fed straight to ``World.step`` via the parallel
-env). The action is built ONCE per ``make_*`` call (constructed via
-:func:`retail_simulator.core.encoding.encode_action` so it respects the registry layout
-+ the discrete-masked expansion/automation one-hot encoding — the encoder derives the
-flat width from the schema, so these archetypes never hardcode a vector length) and the
-SAME read-only array is returned on every call — deterministic across calls and ticks.
+"""Open-loop league archetypes (``aggressor`` / ``lean`` / ``patient``).
 
-Layer note: pure ``core`` reads only (encoding/schema) — no envs, no RL framework, no
-network. Safe under the ``harness`` import-linter contract.
+Each ``make_*`` returns a ``predict(obs, *, episode_start=False) -> np.ndarray`` closure matching the contract :func:`retail_simulator.harness.league._head_to_head_episode_scores` drives. The action is encoded ONCE per ``make_*`` call and the same read-only array is returned on every call — deterministic across calls and ticks. Pure ``core`` reads only (encoding/schema).
 """
 
 from __future__ import annotations
@@ -23,9 +14,8 @@ from retail_simulator.core.encoding import StructuredAction, decode_action, enco
 from retail_simulator.core.schema import N_AUTOMATION_TIERS, N_REGIONS
 
 # The predict closure signature the head-to-head primitive drives: an obs plus an
-# optional ``episode_start`` kwarg (absorbed-and-ignored here — these archetypes are
-# OPEN-LOOP), returning a flat float32 action (44-D as of schema v12; the width is
-# derived from the schema, never hardcoded here).
+# optional ``episode_start`` kwarg (ignored — these archetypes are OPEN-LOOP),
+# returning a flat float32 action (width derived from the schema, never hardcoded).
 ArchetypePredict = Callable[..., npt.NDArray[np.float32]]
 
 AGGRESSOR: str = "aggressor"
@@ -47,7 +37,7 @@ def _structured_action(
     wage_spend: float = 0.0,
     warehouse_invest: float = 0.0,
 ) -> StructuredAction:
-    """ """
+    """Build a :class:`StructuredAction` from lever values; validates the discrete choices."""
     if not (0 <= expansion_choice < N_REGIONS):
         raise ValueError(f"expansion_choice must be in [0, {N_REGIONS}); got {expansion_choice}")
     if not (0 <= automation_tier < N_AUTOMATION_TIERS):
@@ -74,9 +64,7 @@ def _structured_action(
 def _fixed_posture(structured: StructuredAction) -> ArchetypePredict:
     """Freeze ``structured`` into a deterministic open-loop predict closure.
 
-    Encodes ONCE, marks the array read-only (so a downstream ``+=`` in the seam can
-    never mutate the shared posture — the env makes its own working copy), and returns
-    the SAME array on every call regardless of obs / ``episode_start``.
+    Encodes ONCE and marks the array read-only (the env makes its own working copy); the same array is returned on every call regardless of obs / ``episode_start``.
     """
     action = encode_action(structured)
     action.setflags(write=False)
@@ -89,7 +77,7 @@ def _fixed_posture(structured: StructuredAction) -> ArchetypePredict:
 
 
 def make_aggressor() -> ArchetypePredict:
-    """ """
+    """The open-loop ``aggressor``: low price, heavy marketing/promotion, expand, top automation tier."""
     return _fixed_posture(
         _structured_action(
             price=0.75,  # aggressive low price to grab share
@@ -106,7 +94,7 @@ def make_aggressor() -> ArchetypePredict:
 
 
 def make_lean() -> ArchetypePredict:
-    """ """
+    """The open-loop ``lean``: high price, minimal spend, no expansion, no automation."""
     return _fixed_posture(
         _structured_action(
             price=1.6,  # high price to defend margin
@@ -123,7 +111,7 @@ def make_lean() -> ArchetypePredict:
 
 
 def make_patient() -> ArchetypePredict:
-    """ """
+    """The open-loop ``patient``: moderate price and spend, measured expansion, mid automation tier."""
     return _fixed_posture(
         _structured_action(
             price=1.05,  # moderate price near baseline
@@ -140,7 +128,7 @@ def make_patient() -> ArchetypePredict:
 
 
 def default_archetypes() -> dict[str, ArchetypePredict]:
-    """ """
+    """The three uncalibrated open-loop archetypes, keyed by name."""
     return {
         LEAN: make_lean(),
         AGGRESSOR: make_aggressor(),
@@ -149,7 +137,7 @@ def default_archetypes() -> dict[str, ArchetypePredict]:
 
 
 def calibrated_archetypes() -> dict[str, ArchetypePredict]:
-    """ """
+    """The three tuned archetypes (service levels set by the calibrate loop), keyed by name."""
     aggressor = _fixed_posture(
         _structured_action(
             price=0.8,
@@ -197,10 +185,5 @@ def calibrated_archetypes() -> dict[str, ArchetypePredict]:
 
 
 def _assert_decodable(action: npt.NDArray[np.float32]) -> StructuredAction:
-    """Decode a posture action — the in-module guard that a posture is valid (test aid).
-
-    Reused by the test suite to confirm every archetype returns a flat action
-    ``decode_action`` accepts (correct length, in-bounds continuous values, valid
-    discrete one-hot blocks). Exposed here so the round-trip lives next to the encoder.
-    """
+    """Decode a posture action — the in-module guard that a posture is valid (test aid)."""
     return decode_action(action)

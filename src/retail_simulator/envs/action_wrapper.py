@@ -1,11 +1,7 @@
-"""Flat-Box <-> structured action translation for the single-Box SB3 convention.
+"""Flat-Box <-> structured action translation.
 
-In Phase 0.0 the action is just the 1-D ``price_index`` Box, so this is thin — but
-it routes through ``core.encoding.decode_action`` for clipping/validation (the
-single boundary authority) rather than reimplementing bounds, and keeps the
-single-Box shape contract so the masked-expansion design extends cleanly later.
-
-Adapter layer: numpy + core only (no gymnasium needed here).
+Routes through ``core.encoding.decode_action`` for clipping/validation (the single
+boundary authority) rather than reimplementing bounds.
 """
 
 from __future__ import annotations
@@ -28,10 +24,7 @@ def to_core_action(
 ) -> npt.NDArray[np.float32]:
     """Normalize a raw agent action into the flat float32 vector the seam takes.
 
-    The core seam (``World.step``) validates/clips via ``decode_action`` itself,
-    so this only guarantees shape/dtype: a 1-D float32 array of the expected flat
-    length. Raising here on a wrong-length action keeps the failure at the adapter
-    boundary with a clear message (``decode_action`` would also raise).
+    Guarantees shape/dtype only; raises ``ValueError`` on a wrong-length action.
     """
     if schema is None:
         schema = default_action_schema()
@@ -50,12 +43,7 @@ def decode(
     action: npt.NDArray[np.float32] | list[float],
     schema: ActionSchema | None = None,
 ) -> StructuredAction:
-    """Decode a raw agent action into validated, clipped structured levers.
-
-    Thin pass-through to ``core.encoding.decode_action`` (the single clipping /
-    validation authority) so callers that want the structured view (e.g. metrics)
-    do not import core directly.
-    """
+    """Decode a raw agent action into validated, clipped structured levers."""
     if schema is None:
         schema = default_action_schema()
     return decode_action(to_core_action(action, schema), schema)
@@ -66,7 +54,7 @@ def mask_expansion_logits(
     expansion_mask: npt.NDArray[np.bool_],
     schema: ActionSchema | None = None,
 ) -> npt.NDArray[np.float32]:
-    """ """
+    """Mask illegal expansion slots by setting their logits to -inf."""
     if schema is None:
         schema = default_action_schema()
     layout = flatten_action_space_layout(schema)

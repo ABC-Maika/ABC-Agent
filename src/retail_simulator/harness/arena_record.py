@@ -1,9 +1,6 @@
-"""Turn a running :class:`~retail_simulator.harness.arena_match.ArenaMatch` into
-``arena-match-v1``.
+"""Turn a running :class:`~retail_simulator.harness.arena_match.ArenaMatch` into an ``arena-match-v1`` record.
 
-**Cumulative vs window.** ``score_total`` / ``revenue_total`` / ``profit_total`` run from
-round 1; ``profit_window`` and ``opened_regions`` cover only ``(round - snapshot_every,
-round]``, the animation step a player actually watches.
+``score_total`` / ``revenue_total`` / ``profit_total`` run from round 1; ``profit_window`` and ``opened_regions`` cover only ``(round - snapshot_every, round]``, the animation step a player actually watches.
 """
 
 from __future__ import annotations
@@ -27,10 +24,7 @@ _UNIT_SCALE_DECIMALS: int = 4
 def region_class_name(index: int) -> str:
     """The region class at ``index`` under the arena's fixed cycle.
 
-    Region 0 is the stranded FRONTIER slot; regions 1.. cycle
-    :data:`~retail_simulator.harness.arena.ARENA_REGION_CLASSES` as ``(index - 1) mod 4``
-    — the same rule :func:`~retail_simulator.harness.arena.arena_regions` builds the table
-    with, read off the SAME constant rather than a second hardcoded list of four names.
+    Region 0 is the stranded FRONTIER slot; the rest cycle ``ARENA_REGION_CLASSES`` as ``(index - 1) mod 4`` — the same rule ``arena_regions`` uses, read off the same constant.
     """
     if index == 0:
         return ARENA_REGION_CLASSES[-1].name
@@ -38,7 +32,7 @@ def region_class_name(index: int) -> str:
 
 
 def region_table(config: CoreConfig) -> list[dict[str, Any]]:
-    """ """
+    """The ``regions`` table of the match header (index, class, base demand, enterable)."""
     return [
         {
             "index": index,
@@ -62,9 +56,7 @@ def build_header(
 ) -> dict[str, Any]:
     """Everything an ``arena-match-v1`` document says about a match except its snapshots.
 
-    ``rounds`` is the number PLANNED (a cancelled or still-running demo carries fewer
-    snapshots than that implies — read ``rounds_done`` from the demo envelope, never the
-    header, to know how far a match actually got).
+    ``rounds`` is the number PLANNED; read ``rounds_done`` from the demo envelope to know how far a match actually got.
     """
     if len(homes) != len(seats):
         raise ValueError(f"homes names {len(homes)} regions for {len(seats)} seats")
@@ -93,11 +85,7 @@ def build_header(
 class MatchRecorder:
     """Fold every round into the schema's snapshots, emitting one per window.
 
-    Feed it every :class:`~retail_simulator.harness.arena_match.RoundResult` in order via
-    :meth:`observe`; it returns the Snapshot dict on a window boundary and ``None``
-    otherwise. A window boundary is ``round % snapshot_every == 0`` — PLUS the header's
-    final round, so a match whose length is not a multiple of ``snapshot_every`` still ends
-    on a snapshot instead of silently dropping its tail.
+    Feed it every ``RoundResult`` in order via :meth:`observe`; it returns the Snapshot dict on a window boundary (``round % snapshot_every == 0``, plus the final round) and ``None`` otherwise, so a match whose length is not a multiple of ``snapshot_every`` still ends on a snapshot.
     """
 
     def __init__(self, header: dict[str, Any], snapshot_every: int) -> None:

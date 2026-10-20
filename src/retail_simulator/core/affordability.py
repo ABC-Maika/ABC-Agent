@@ -1,38 +1,13 @@
-"""Affordability: the single pure owner of "can this retailer afford this spend."
+"""Affordability: how much of its intended spend each retailer can actually pay.
 
-**THE ORDER INSIDE ONE TICK (CLAMP-T3 — the contract this module exists to make
-possible).** ``World.step``, under ``config.wage.cash_budget_enabled``, runs::
-
-    1. decode every seat's action ONCE       -> DecodedLevers   (no RNG)
-       (a learning seat's from ``joint_action``; an NPC seat's from the
-       ``pending_action`` its policy decided last tick — NFD-1. Every seat is
-       clamped by the same rule below, whichever way its action arrived.)
-    2. capex gates, FIRST and IN FULL        -> gated_expansion_capex
-                                                gated_automation_capex
-    3. intended_discretionary_spend(levers, wage_bill, config)     (the money)
-    4. compute_spend_clamp(cash, intent, committed_capex, credit_limit)  -> clamp[K] in [0, 1]
-    5. scale_discretionary_levers(levers, clamp)           -> the SCALED levers
-    6. resolve_demand(..., levers=scaled, spend_clamp=clamp)       (draw #1)
-    7. apply_accounting(...) charges exactly the scaled money      (pure ledger)
-
-Steps 3-5 are the whole fix. Because the LEVERS are scaled — not just the money —
-one number is simultaneously the cost, the demand effect, and what every
-downstream seat (awareness, research fidelity, wage level, warehouse capacity)
-reads. Capex comes first and is never scaled: the two gates already checked it
-against the same start-of-tick cash, and a store you cannot fully pay for does
-not half-open (design note Q2). Promotion is deliberately NOT scaled — promo cost
-is a VARIABLE COST OF SALES, funded per unit actually sold (design note Q1), so
-the consumer stockpile still builds from the unclamped promotion.
-
-When the gate is off (``CoreConfig.default()``) ``World.step`` runs its
-pre-existing sequence untouched and every clamp is 1.0 — bit-for-bit identical.
-
-No RNG, no config-gating: every function here is pure arithmetic over its
-arguments. Callers decide WHEN to call these — this module never reads a gate
-flag itself, so it stays trivially unit-testable and has no opinion on
-byte-identity paths.
-
-Pure and framework-free: numpy only.
+``World.step`` (with the cash-budget gate on) decodes the levers, runs the
+capex gates in full, computes each retailer's intended discretionary spend,
+derives a per-retailer clamp in [0, 1], and scales the discretionary levers by
+it, so cost and demand effect move together. Capex is never scaled (a store
+you cannot fully pay for does not half-open); promotion is not scaled either
+(a variable cost of sales, funded per unit sold). With the gate off, every
+clamp is 1.0 and the pre-existing sequence runs untouched. Pure arithmetic,
+no RNG.
 """
 
 from __future__ import annotations
@@ -48,15 +23,10 @@ from retail_simulator.core.state import WorldState
 
 @dataclass(frozen=True)
 class DecodedLevers:
-    """The per-retailer levers decoded from a tick's ``joint_action`` (``[K]`` each).
+    """Per-retailer levers decoded from the joint action, one [K] array each.
 
-    Field-for-field the same arrays ``demand.py::_decode_levers`` used to return as
-    a bare 11-tuple (same names as the local variables ``resolve_demand`` unpacked
-    it into, same dtypes, same shapes) — this dataclass is purely a naming/typing
-    upgrade over that tuple, not a new decode. See ``demand.py::_decode_levers``
-    for the decode semantics (boundary validation via ``decode_action``, the
-    per-lever NPC/absent-retailer registry defaults, which levers are
-    contemporaneous vs lagged-investment vs perception-only).
+    Decode semantics (validation, NPC defaults, which levers are contemporaneous
+    vs lagged vs perception-only) live in ``demand.py::_decode_levers``.
     """
 
     price_indices: npt.NDArray[np.float64]  # [K]
@@ -77,7 +47,7 @@ def gated_expansion_capex(
     choices: npt.NDArray[np.float64],
     config: CoreConfig,
 ) -> tuple[npt.NDArray[np.float64], list[tuple[int, ...]]]:
-    """ """
+    """Charge expansion capex only where the store is affordable from pre-capex cash."""
     n_regions = len(state.regions)
     capex_cfg = config.expansion.expansion_capex
     capex = np.zeros(len(state.retailers), dtype=np.float64)
@@ -95,8 +65,7 @@ def gated_expansion_capex(
         )
         if valid_open:
             capex[idx] = capex_cfg
-            stores[choice] = 1  # open-only here; MECHANIC 4 restructuring is the
-            # only path that ever closes a store (never this gate)
+            stores[choice] = 1  # open-only here; restructuring is the only path that closes a store
         next_stores_per_region.append(tuple(stores))
     return capex, next_stores_per_region
 
@@ -106,7 +75,7 @@ def gated_automation_capex(
     targets: npt.NDArray[np.int64],
     config: CoreConfig,
 ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.int64], npt.NDArray[np.int64]]:
-    """ """
+    """Charge only the affordable automation tier differential; tier never decreases."""
     capex_per_tier = config.automation.capex_per_tier
     n = len(state.retailers)
     automation_capex = np.zeros(n, dtype=np.float64)
@@ -115,9 +84,7 @@ def gated_automation_capex(
     for idx, retailer in enumerate(state.retailers):
         target = int(targets[idx])
         prev = retailer.automation_tier
-        # Clamp pathological targets defensively (decode_action argmaxes a 3-wide
-        # block so the value is in [0, n_tiers - 1] under normal flow, but a
-        # NPC/absent retailer default has a 0 path that never trips this).
+        # Clamp out-of-range targets: keep the previous tier.
         if not 0 <= target < len(capex_per_tier):
             target = prev
         differential = capex_per_tier[target] - capex_per_tier[prev]
@@ -138,7 +105,7 @@ def intended_discretionary_spend(
     wage_bill: npt.NDArray[np.float64],
     config: CoreConfig,
 ) -> npt.NDArray[np.float64]:
-    """ """
+    """Total intended per-tick spend from the discretionary levers plus the wage bill."""
     marketing_exponent = config.marketing.marketing_cost_exponent
     if marketing_exponent == 1.0:
         marketing_term = levers.spend_fraction * config.marketing.cost_per_unit_spend
@@ -160,24 +127,13 @@ def scale_discretionary_levers(
     levers: DecodedLevers,
     clamp: npt.NDArray[np.float64],
 ) -> DecodedLevers:
-    """``levers`` with every DISCRETIONARY lever multiplied by the per-retailer ``clamp``.
+    """Scale the discretionary levers by the per-retailer clamp.
 
-    Scaled: ``spend_fraction``, ``assortment``, ``research``, ``loyalty_spend``,
-    ``wage_spend``, ``warehouse_invest`` — the six levers whose value IS a purchase.
-    A retailer that can fund 40 % of its intent buys 40 % of the breadth, 40 % of the
-    awareness build, 40 % of the fidelity: the scaled object is what
-    ``resolve_demand`` reads, so cost and effect cannot come apart.
-
-    Carried through UNSCALED: ``price_indices`` (a decision, not a purchase),
-    ``promotion`` (a variable cost of sales — the consumer stockpile must keep
-    building from the full promoted intensity, design note Q1), ``expansion`` and
-    ``automation_tier`` (one-shot choices the capex gates already resolved against
-    the same cash — scaling them would half-open a store).
-
-    Note the WAGE BILL is not derivable from the scaled ``wage_spend`` alone
-    (``clamp · (base + s·scale) ≠ base + (clamp·s)·scale``): the seam scales the paid
-    wage itself, and the scaled ``wage_spend`` here is the reported SoT of what was
-    actually bought. Pure — a new frozen instance; the input is never mutated.
+    Scaled: spend_fraction, assortment, research, loyalty_spend, wage_spend,
+    warehouse_invest, the levers whose value is a purchase. Unscaled:
+    price_indices, promotion, expansion, automation_tier. The wage bill cannot be
+    re-derived from the scaled wage_spend alone. Returns a new instance; the input
+    is not mutated.
     """
     return DecodedLevers(
         price_indices=levers.price_indices,
@@ -200,10 +156,9 @@ def compute_spend_clamp(
     committed_capex: npt.NDArray[np.float64],
     credit_limit: float = 0.0,
 ) -> npt.NDArray[np.float64]:
-    """ """
+    """Per-retailer clamp in [0, 1]: the affordable fraction of intended spend."""
     if credit_limit == 0.0:
-        # Byte-identity anchor: the SAME code the pre-credit-line clamp always ran,
-        # not merely a numerically-equal ``cash + 0.0 - committed_capex``.
+        # credit_limit == 0 keeps the original float-op order .
         available = np.maximum(cash - committed_capex, 0.0)
     else:
         available = np.maximum(cash + credit_limit - committed_capex, 0.0)

@@ -1,43 +1,8 @@
 """Four CLOSED-LOOP geographic archetypes stressing the arena's geography axis (S5).
 
-Every other lever (price/marketing/assortment/promotion/research/service_level/
-automation/loyalty_spend) is a FIXED per-archetype constant, exactly like the spike
-archetypes — only the ``expansion`` target is closed-loop. This keeps each posture
-simple and auditable: what varies tick-to-tick is entirely the geography-targeting rule,
-never the demand/marketing posture.
+Only the ``expansion`` target is closed-loop; every other lever is a fixed per-archetype constant borrowed from :mod:`retail_simulator.harness.spike_archetypes`'s vetted anchors. Region 0 (the arena's deliberately stranded slot) is never a candidate in any rule — every scan starts at region 1.
 
-**Region 0 is never a candidate, by construction, in every rule below** (the arena's
-deliberately STRANDED slot — ``harness/arena.py``'s module docstring; the expansion
-lever's permanent hold/no-op index). Every candidate scan below starts at region 1 —
-there is no special-case "skip 0" branch to audit because 0 is simply never enumerated.
-
-**Numeric lever choices are borrowed from already-vetted values in
-:mod:`retail_simulator.harness.spike_archetypes`** (the codebase's own established
-"low/mid/premium price", "minimal/mid/max marketing-assortment-loyalty", and
-"deep-squeezer/squeezer/partner service_level" anchors) rather than invented afresh —
-this trivially satisfies "every lever stays within its :class:`~retail_simulator.core.
-schema.LeverSpec` bounds" (the source values are already proven in-bounds) and keeps the
-four postures' non-geographic axes comparable in *scale* to the calibrated 2-region
-archetypes. Every lever the contract table above does not name (assortment/promotion/
-loyalty_spend for CHERRY-PICKER and FAST-FOLLOWER) is held at PATIENT's calibrated
-"moderate" seed value; ``research`` stays at 0.0 for all four (none of these rules read
-the noised COMPETITOR block, so paying for perception fidelity would be pure wasted
-opex) and ``automation`` stays at tier 0 (the registry no-op default) since no archetype
-in this family is differentiated on that axis.
-
-Layer note: pure ``core`` reads only (encoding/schema/config) — no envs, no RL
-framework, no network. Safe under the ``harness`` import-linter contract, mirroring
-:mod:`retail_simulator.harness.spike_archetypes`.
-
-**Ladder/league allowlist extension (RLB-8b — done).** ``harness.league.
-POOL_ARCHETYPE_LABELS`` and ``harness.ladder.LADDER_ARCHETYPE_LABELS`` are the union
-of this module's four labels and their respective spike-only family
-(``POOL_SPIKE_ARCHETYPE_LABELS``/``LADDER_SPIKE_ARCHETYPE_LABELS``), importing
-:data:`GEO_ARCHETYPE_LABELS` rather than re-listing it — so ``--participants
-archetype:<name>``/``--seed-archetypes`` can seat these four in the ladder/league CLI
-and the ``phase4_rl_confirm.py`` driver, config-aware materialization (a region table
-threaded through ``_materialize_predicts``/``FrozenPolicyPool`` and required whenever a
-geo name is actually used) included.
+Layer note: pure ``core`` reads only (encoding/schema/config) — no envs, no RL framework, no network.
 """
 
 from __future__ import annotations
@@ -58,29 +23,20 @@ FORTRESS: str = "fortress"
 CHERRY_PICKER: str = "cherry-picker"
 FAST_FOLLOWER: str = "fast-follower"
 
-# The four labels in :func:`geo_archetypes`'s OWN dict-literal (insertion) order — the
-# single source of truth for "what archetypes exist, in what canonical order", so a
-# caller needing just the labels (e.g. ``scripts/phase6_geo_tournament.py``) can import
-# this constant instead of re-hardcoding (and risking drifting) its own copy of the
-# 4-tuple. Deliberately a STATIC tuple, not derived by calling :func:`geo_archetypes`
-# and reading its ``.keys()`` — a follow-up to S5 (commit 91fd7db) specifically removed
-# a throwaway ``geo_archetypes()`` construction used only to enumerate labels.
+# The four labels in :func:`geo_archetypes`'s dict-literal (insertion) order — the single
+# source of truth for what archetypes exist, in what canonical order.
 GEO_ARCHETYPE_LABELS: tuple[str, ...] = (SPRAWLER, FORTRESS, CHERRY_PICKER, FAST_FOLLOWER)
 
 # The predict closure signature the head-to-head primitives drive (obs positional, an
-# optional ``episode_start`` kwarg, a flat float32 action) — the SAME shape
-# :data:`retail_simulator.harness.spike_archetypes.ArchetypePredict` returns, so the
-# league/ladder materialize seam (and ``run_spike``) can seat either family
-# interchangeably.
+# optional ``episode_start`` kwarg, a flat float32 action) — same shape as
+# spike_archetypes.ArchetypePredict, so either family seats interchangeably.
 Predict = Callable[..., npt.NDArray[np.float32]]
 
-# FORTRESS's target store count and its final tick eligible for an expansion attempt
-# (inclusive — see _fortress_target's docstring for the exact tick-counting convention).
+# FORTRESS's target store count and its final tick eligible for an expansion attempt (inclusive).
 _FORTRESS_STORE_CAP: int = 3
 _FORTRESS_LAST_ELIGIBLE_TICK: int = 5
 
-# --- Non-geographic lever postures, borrowed from spike_archetypes' own established
-# anchors (see the module docstring's rationale). ---
+# Non-geographic lever postures, borrowed from spike_archetypes' established anchors.
 _PRICE_LOW: float = 0.75  # AGGRESSOR's seed "aggressive low price to grab share"
 _PRICE_MID: float = 1.05  # PATIENT's seed "moderate price near baseline"
 _PRICE_PREMIUM: float = 1.5  # LEAN's seed "high price to defend margin"
@@ -113,7 +69,7 @@ def _name_to_index(n_regions: int) -> dict[str, int]:
 
 
 def _metro_indices(region_table: tuple[RegionConfig, ...]) -> tuple[int, ...]:
-    """ """
+    """The enterable METRO-class indices (top-quartile by base pie), excluding region 0."""
     if len(region_table) < 2:
         return ()
     n_enterable = len(region_table) - 1
@@ -153,7 +109,7 @@ def _sprawler_target(obs: npt.NDArray[np.float32], *, idx: dict[str, int], n_reg
 def _fortress_target(
     obs: npt.NDArray[np.float32], tick: int, *, idx: dict[str, int], n_regions: int
 ) -> int:
-    """ """
+    """Sprawler's rule while under the store cap and before the last eligible tick; 0 (no-op) otherwise."""
     if tick > _FORTRESS_LAST_ELIGIBLE_TICK:
         return 0
     if float(obs[idx["stores"]]) >= _FORTRESS_STORE_CAP:
@@ -227,13 +183,7 @@ def _structured_action(
 ) -> StructuredAction:
     """Build a :class:`StructuredAction` over the full 11-lever registry.
 
-    Mirrors :func:`retail_simulator.harness.spike_archetypes._structured_action`
-    exactly, EXCEPT ``expansion_choice`` is bound-checked against ``n_regions`` (this
-    WORLD's actual region count) rather than the fixed 2-region ``N_REGIONS`` constant
-    — that function's own docstring explicitly reserves the wider check for "a later
-    slice's ``competition_archetypes()``", which is this module. ``wage_spend``/
-    ``warehouse_invest`` default to 0.0 (the registry byte-identity anchor); none of
-    the four geo archetypes' postures need them.
+    ``expansion_choice`` is bound-checked against ``n_regions`` (this world's region count); ``wage_spend``/``warehouse_invest`` default to 0.0 (the registry default).
     """
     if not (0 <= expansion_choice < n_regions):
         raise ValueError(f"expansion_choice must be in [0, {n_regions}); got {expansion_choice}")
@@ -272,31 +222,9 @@ def _make_predict(
     automation_tier: int,
     loyalty_spend: float,
 ) -> Predict:
-    """Wrap a pure ``target_fn(obs, tick) -> expansion_choice`` into a stateful,
-    deterministic ``predict`` closure carrying its own tick counter.
+    """Wrap a pure ``target_fn(obs, tick) -> expansion_choice`` into a stateful, deterministic ``predict`` closure carrying its own tick counter.
 
-    Mirrors the mutable-cell idiom :meth:`retail_simulator.harness.league.
-    FrozenPolicyPool.materialize` uses for the LSTM checkpoint closure's carried
-    hidden state (``state_cell: list[Any] = [None]``) — a one-element list closed
-    over by ``predict``, since resetting a plain closure-captured int on
-    ``episode_start`` needs ``nonlocal`` either way; a cell reads identically and
-    composes with helper calls. ``tick_cell[0]`` counts calls since construction or
-    the last ``episode_start=True`` reset — the first call (or the first after a
-    reset) computes its action at ``tick == 0``.
-
-    Every call is deterministic in (obs, tick): the non-geographic levers are fixed
-    constants closed over here; only ``expansion_choice`` (via ``target_fn``) varies.
-
-    ``predict`` validates ``len(obs) == n_obs`` (``n_obs`` = ``len(observation_schema
-    (n_regions))``, computed once at construction from the SAME ``idx`` every
-    ``_make_*`` builder already has) — a wrong-width obs (e.g. a caller passing an
-    ``n_regions``-mismatched world's observation) would otherwise fail as a silent
-    wrong-field read via ``idx``, or not at all, rather than a loud, diagnosable error.
-    ``**_kwargs`` is absorbed-and-ignored (mirrors :meth:`retail_simulator.harness.
-    league.FrozenPolicyPool.materialize`'s MLP checkpoint closures, e.g.
-    ``_checkpoint_predict_mlp(obs, **_kwargs)``) so a caller that uniformly passes
-    other keyword args to every roster member's ``predict`` (present or future) does
-    not need this family to special-case them.
+    Deterministic in (obs, tick); only ``expansion_choice`` varies. ``predict`` validates ``len(obs) == n_obs`` so a wrong-width obs fails loudly; extra keyword args are absorbed and ignored. The tick resets on ``episode_start=True``; the first call after (re)start runs at ``tick == 0``.
     """
 
     def predict(
@@ -415,16 +343,9 @@ def _make_fast_follower(
 def geo_archetypes(n_regions: int, region_table: tuple[RegionConfig, ...]) -> dict[str, Predict]:
     """Build the four closed-loop geographic archetypes for a world of ``n_regions``.
 
-    ``region_table`` is the ``DemandConfig.regions`` tuple the world these predict
-    closures will play in was built from (e.g. ``harness.arena.arena_regions(n_regions)``
-    — CHERRY-PICKER's METRO-class targets and FAST-FOLLOWER's pie-size tie-break are
-    both derived from its ``base_regional_demand`` values, never a hardcoded class
-    pattern). Each closure carries its OWN independent tick counter (construction, not
-    call, is where fresh state is allocated) — calling this function twice yields two
-    fully independent rosters, e.g. for a self-play matchup of the same archetype
-    against itself.
+    ``region_table`` is the world's ``DemandConfig.regions`` tuple (e.g. ``harness.arena.arena_regions(n_regions)``); CHERRY-PICKER's METRO targets and FAST-FOLLOWER's pie tie-break derive from it, never a hardcoded pattern. Each closure carries its own tick counter — two calls yield two independent rosters.
 
-    Raises ``ValueError`` if ``region_table``'s length disagrees with ``n_regions``.
+    Raises ``ValueError`` if ``len(region_table) != n_regions``.
     """
     if len(region_table) != n_regions:
         raise ValueError(

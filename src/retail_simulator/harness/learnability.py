@@ -1,20 +1,8 @@
-"""SB3 PPO vs random baseline — the Phase 0.0 learnability gate.
+"""SB3 PPO vs a random baseline — the single-agent learnability gate.
 
-PASS (the exact rule) requires BOTH:
+PASS requires BOTH: ``ppo_mean >= random_mean + 2 * random_std`` AND a non-degenerate learning curve (final window mean > initial window mean). A JSON report is written for provenance; a learning-curve PNG is saved only if ``matplotlib`` is importable (best-effort, never a hard dependency).
 
-1. **Beats random by >= 2 sigma:** ``ppo_mean >= random_mean + 2 * random_std``.
-2. **Non-degenerate learning:** the smoothed training curve trends up (the final
-   window's mean return exceeds the initial window's, i.e. the run actually
-   learned rather than starting already-good or flat).
-
-A JSON report is written for provenance; a learning-curve PNG is saved only if
-``matplotlib`` is importable (it is NOT a hard dependency of this package — the
-plot is best-effort and silently skipped when absent).
-
-Layer note: ``harness -> envs -> core``; importing ``gymnasium`` and
-``stable-baselines3`` here is allowed (forbidden only under ``core/``). Heavy RL
-imports are done lazily inside functions so ``import retail_simulator.harness``
-stays cheap and does not hard-require the ``[train]`` extra.
+Layer note: ``harness -> envs -> core``; importing ``gymnasium`` / ``stable-baselines3`` here is allowed (forbidden only under ``core/``). Heavy RL imports are lazy, so ``import retail_simulator.harness`` stays cheap.
 """
 
 from __future__ import annotations
@@ -31,9 +19,8 @@ if TYPE_CHECKING:  # type-only imports; never pulled in at runtime import time
     import gymnasium as gym
 
 # The store count of an agent present in region 0 only (the reset state). An
-# episode "opens region 1" the tick its open-store count first exceeds this — the
-# seam no-ops an unaffordable/illegal open, so a rising ``stores`` is the
-# authoritative signal that an open was actually ACCEPTED (not merely requested).
+# episode "opens region 1" the tick its open-store count first exceeds this — the seam
+# no-ops an unaffordable/illegal open, so a rising ``stores`` means an open was ACCEPTED.
 _REGION_0_ONLY_STORES: int = 1
 
 # Default scoring/eval horizon (~2 simulated years) — mirrors the core hint.
@@ -53,7 +40,7 @@ _log = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class ExpansionUptake:
-    """ """
+    """How often a trained agent opens region 1, and when (median open tick)."""
 
     fraction_opening: float
     median_open_tick: float | None
@@ -62,7 +49,7 @@ class ExpansionUptake:
 
 @dataclass(frozen=True)
 class GateReport:
-    """ """
+    """The gate's measured quantities + PASS/FAIL components."""
 
     ppo_mean_reward: float
     random_mean_reward: float
@@ -78,7 +65,7 @@ class GateReport:
 
     @property
     def passed(self) -> bool:
-        """ """
+        """PASS rule: beats random AND the curve trends up."""
         return self.beats_random and self.curve_trends_up
 
     def to_dict(self) -> dict[str, Any]:
@@ -86,8 +73,7 @@ class GateReport:
         data = asdict(self)
         data["learning_curve"] = [list(point) for point in self.learning_curve]
         data["passed"] = self.passed
-        # asdict already turned the nested ExpansionUptake into a dict (or left it
-        # None) — JSON-serializable as-is; median_open_tick stays None when never.
+        # asdict already turned the nested ExpansionUptake into a dict (or left it None).
         return data
 
 
@@ -99,10 +85,7 @@ def evaluate_random_baseline(
 ) -> list[float]:
     """Roll out the random policy (``action_space.sample()``) for N episodes.
 
-    Returns the per-episode total (undiscounted) returns. The env is reset with a
-    distinct seed per episode (derived from ``seed``) and the action space's RNG
-    is seeded once for reproducibility, so the baseline is deterministic given
-    ``seed``.
+    Returns per-episode total (undiscounted) returns; deterministic given ``seed`` (per-episode reset seed + seeded action-space RNG).
     """
     returns: list[float] = []
     env.action_space.seed(seed)
@@ -128,9 +111,7 @@ def evaluate_policy_returns(
 ) -> list[float]:
     """Roll out a trained SB3 model deterministically for N episodes.
 
-    Returns per-episode total returns. Uses ``model.predict(..,
-    deterministic=True)`` so the evaluation reflects the learned policy, not its
-    exploration noise. Same per-episode seeding scheme as the baseline.
+    Per-episode total returns via ``model.predict(.., deterministic=True)`` (no exploration noise); same per-episode seeding as the baseline.
     """
     returns: list[float] = []
     for episode in range(episodes):
@@ -153,7 +134,7 @@ def measure_expansion_uptake(
     episodes: int = DEFAULT_EVAL_EPISODES,
     seed: int = 0,
 ) -> ExpansionUptake:
-    """ """
+    """Fraction of episodes in which the agent opened region 1, and the median open tick."""
     open_ticks: list[int] = []
     for episode in range(episodes):
         obs, _info = env.reset(seed=seed + episode)
@@ -165,9 +146,8 @@ def measure_expansion_uptake(
             obs, _reward, terminated, truncated, info = env.step(action)
             step_index += 1
             if opened_at is None and int(info.get("stores", 0)) > _REGION_0_ONLY_STORES:
-                # First tick the open-store count rose => region 1 was opened. Use
-                # the env's own episode_step when present (its provenance for the
-                # tick), else fall back to the loop counter.
+                # First tick the open-store count rose => region 1 was opened; prefer the
+                # env's own episode_step, else fall back to the loop counter.
                 opened_at = int(info.get("episode_step", step_index))
             done = bool(terminated) or bool(truncated)
         if opened_at is not None:
@@ -185,10 +165,7 @@ def measure_expansion_uptake(
 def _curve_trends_up(curve: list[tuple[int, float]]) -> bool:
     """Is the learning curve non-degenerate (final window > initial window)?
 
-    With < 4 samples (a very short smoke), we cannot judge a trend, so we treat
-    it as non-degenerate (do not block on too little data — the >=2 sigma test
-    still governs). Otherwise compare the mean of the last quarter of logged
-    points against the mean of the first quarter.
+    With < 4 samples the trend cannot be judged, so it is treated as non-degenerate (the >= 2 sigma test still governs). Otherwise compares the mean of the last quarter of logged points against the first quarter.
     """
     if len(curve) < 4:
         return True
@@ -212,21 +189,7 @@ def run_gate(
 ) -> GateReport:
     """Train PPO, compare to random, and return the PASS/FAIL :class:`GateReport`.
 
-    Trains ``PPO("MlpPolicy", env)`` for ``total_steps`` with no custom wrappers,
-    then evaluates both PPO and the random baseline over ``eval_episodes`` episodes
-    at a fixed ``seed``. A learning curve is captured via SB3's ``Monitor`` + a
-    logging callback.
-
-    ``n_envs`` controls training parallelism: with ``n_envs > 1`` PPO collects
-    rollouts from ``n_envs`` env instances in parallel (SB3 ``SubprocVecEnv``),
-    multiplying wall-clock throughput across CPU cores without changing the core
-    env. Sub-envs are seeded deterministically from ``seed`` (seed, seed+1, ...),
-    so the gate stays reproducible given ``(seed, n_envs)``. Evaluation always runs
-    on a single env. (The core sim is untouched; this is purely the training path.)
-
-    If ``report_path`` is given, the report JSON (and, when ``matplotlib`` is
-    available and ``save_plot`` is true, a ``learning_curve.png`` beside it) is
-    written. The heavy RL imports happen here so the module stays import-light.
+    Trains ``PPO("MlpPolicy", env)`` for ``total_steps`` (no custom wrappers), then evaluates PPO and the random baseline over ``eval_episodes`` at a fixed ``seed``. ``n_envs > 1`` collects rollouts in parallel (``SubprocVecEnv``, fork start method, sub-envs seeded ``seed + i``); evaluation always runs on a single env. With ``report_path`` given, the report JSON (+ best-effort ``learning_curve.png``) is written. Heavy RL imports happen here so the module stays import-light.
     """
     import gymnasium as gym
     from stable_baselines3 import PPO
@@ -247,9 +210,8 @@ def run_gate(
             seed=seed,
             env_kwargs={"max_episode_steps": max_episode_steps},
             vec_env_cls=SubprocVecEnv,
-            # fork avoids re-importing __main__ (forkserver/spawn break when the
-            # caller isn't an importable module); safe here — the env has no
-            # background threads.
+            # fork avoids re-importing __main__ (forkserver/spawn break for a
+            # non-importable caller); safe here — the env has no background threads.
             vec_env_kwargs={"start_method": "fork"},
         )
     else:
@@ -291,11 +253,10 @@ def build_report(
     eval_episodes: int,
     expansion_uptake: ExpansionUptake | None = None,
 ) -> GateReport:
-    """ """
+    """Assemble the :class:`GateReport` from per-episode returns + the learning curve."""
     ppo_mean = float(np.mean(ppo_returns))
     random_mean = float(np.mean(random_returns))
-    # Population std of the baseline returns; the ">= 2 sigma" rule wants the
-    # spread of the random baseline itself.
+    # Population std of the baseline returns: the ">= 2 sigma" rule wants the baseline's own spread.
     random_std = float(np.std(random_returns))
     margin = ppo_mean - random_mean
     threshold = GATE_SIGMA_MULTIPLE * random_std
@@ -319,10 +280,7 @@ def build_report(
 def _make_curve_callback(sink: list[tuple[int, float]]) -> Any:
     """Build an SB3 callback that records rolling mean episode reward.
 
-    SB3's ``BaseCallback`` is imported lazily (it is only available with the
-    ``[train]`` extra). At each rollout end the callback appends ``(timestep,
-    mean_reward)`` to ``sink`` from the ``Monitor``-tracked episode-reward
-    buffer, so the learning curve has a handful of points even on a short run.
+    ``BaseCallback`` is imported lazily (only available with the ``[train]`` extra). At each rollout end the callback appends ``(timestep, mean_reward)`` to ``sink`` from the ``Monitor``-tracked episode buffer.
     """
     from stable_baselines3.common.callbacks import BaseCallback
 
@@ -355,9 +313,7 @@ def _write_report(report: GateReport, report_path: Path, *, save_plot: bool) -> 
 def _maybe_save_curve_plot(report: GateReport, plot_path: Path) -> bool:
     """Save a learning-curve PNG if matplotlib is importable; else skip silently.
 
-    Returns ``True`` if a plot was written. ``matplotlib`` is intentionally NOT a
-    dependency of this package (only the ``[viz]`` extra), so this degrades to a
-    no-op when it is absent.
+    Returns ``True`` if a plot was written (matplotlib is an optional ``[viz]`` extra, so this degrades to a no-op when absent).
     """
     try:
         import matplotlib

@@ -1,20 +1,11 @@
 """Learnability + competition tooling (NOT in the env import path).
 
-* :mod:`~retail_simulator.harness.sweep` — an analytical action-space sweep (degeneracy
-  detection) against the pure :class:`~retail_simulator.core.world.World` (no RL, fast).
-* :mod:`~retail_simulator.harness.learnability` — the SINGLE-agent gate: SB3 PPO vs a
-  random baseline → a PASS/FAIL :class:`GateReport`.
-* :mod:`~retail_simulator.harness.parallel_gate` (Phase 0.5) — the SuperSuit↔SB3 bridge,
-  the param-shared self-play MULTI-agent gate (scored on the STATIONARY weighted
-  objective), and the soft strategic-diversity report.
-* :mod:`~retail_simulator.harness.calibrate` (Phase 0.5) — the NPC calibrate loop
-  (each archetype's beat-random margin on its primary metric, on the fast seam) + the
-  reward variance-balance health check.
+* ``sweep`` — an analytical action-space sweep (degeneracy detection) against the pure ``World`` (no RL, fast).
+* ``learnability`` — the single-agent gate: SB3 PPO vs a random baseline → a PASS/FAIL :class:`GateReport`.
+* ``parallel_gate`` — the SuperSuit↔SB3 bridge, the param-shared self-play multi-agent gate (scored on the stationary weighted objective), and the soft strategic-diversity report.
+* ``calibrate`` — the NPC calibrate loop (each archetype's beat-random margin on its primary metric) + the reward variance-balance health check.
 
-Layer note: the harness sits ABOVE the env adapter (``harness -> {envs, core,
-stable_baselines3, supersuit, gymnasium, pettingzoo}``); it always goes through
-``RetailEnv``/``RetailParallelEnv``/``World`` and never reimplements world logic. Heavy
-RL imports are done LAZILY inside functions so importing this package stays cheap.
+Layer note: the harness sits ABOVE the env adapter (``harness -> {envs, core, stable_baselines3, supersuit, gymnasium, pettingzoo}``) and always goes through ``RetailEnv``/``RetailParallelEnv``/``World``; it never reimplements world logic. Heavy RL imports are done LAZILY inside functions so importing this package stays cheap.
 """
 
 from __future__ import annotations

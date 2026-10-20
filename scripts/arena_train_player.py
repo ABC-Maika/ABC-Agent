@@ -1,10 +1,6 @@
 """Train one RL player for the 25-region arena with a named recipe.
 
-The league driver (``scripts/phase4_rl_confirm.py``) is reused verbatim. Only its env resolver
-is replaced, because the driver still exposes no flags for the wage-mechanic knobs (it does have
-its own ``--reward`` now, passed through in ``driver_argv`` below as a no-op consistency check).
-The full effective recipe is written to ``recipe.json`` in the pool directory, since the
-driver's own summary records only part of it.
+Wraps the league driver (``scripts/phase4_rl_confirm.py``), replacing only its env resolver, and writes the full effective recipe to ``recipe.json`` in the pool directory.
 """
 
 from __future__ import annotations
@@ -52,7 +48,7 @@ def build_config(
     stockpile_build: float | None = None,
     stockpile_decay: float | None = None,
 ) -> CoreConfig:
-    """ """
+    """Build the arena CoreConfig from world/reward names + optional knob overrides (None = inherit the world's value)."""
     if world not in WORLDS:
         raise ValueError(f"world must be one of {WORLDS}, got {world!r}")
     if reward not in REWARDS:
@@ -74,13 +70,8 @@ def build_config(
         if value is not None
     }
     if wage_overrides:
-        # The override field names come from the caller (CLI flags), so they are not
-        # statically known; ``WageConfig`` mixes bool/int/float fields (MECHANIC 4
-        # added the int-typed pair above), which mypy cannot verify a same-key-set
-        # ``**dict`` unpack against. The cast says exactly that -- kept to this one
-        # line rather than loosening ``build_config``'s own signature -- mirroring
-        # ``harness/arena_match.py``'s ``_apply()`` helper, which exists for the
-        # identical reason.
+        # Override keys come from CLI flags (not statically known) and WageConfig mixes bool/int/float
+        # fields, so the cast is the one-line mypy escape hatch (same reason as arena_match._apply).
         cfg = replace(cfg, wage=replace(cast(Any, cfg.wage), **wage_overrides))
     if ramp_ticks is not None:
         cfg = replace(cfg, warehouse=replace(cfg.warehouse, ramp_ticks=ramp_ticks))
@@ -107,7 +98,7 @@ def build_config(
 
 
 def arena_knobs(cfg: CoreConfig) -> dict[str, float]:
-    """ """
+    """The effective arena knob values in cfg that deviate from the class defaults (for recipe.json)."""
     knobs: dict[str, float] = {
         "overhead_reference_stores": cfg.wage.overhead_reference_stores,
         "overhead_exponent": cfg.wage.overhead_exponent,
@@ -315,8 +306,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "0.98",
         "--env",
         "arena-balanced" if args.world == "balanced" else "arena",
-        # H5: passed explicitly so the driver's own --reward agrees with what
-        # build_config() already baked into cfg above -- a no-op confirmation.
+        # Pass --reward explicitly so the driver's copy agrees with what build_config() baked in (no-op).
         "--reward",
         args.reward,
         "--mask-expansion",

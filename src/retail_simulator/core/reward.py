@@ -1,33 +1,9 @@
-"""Reward model: profit-only primitive + the Phase 0.5 weighted/z-normalized reward.
+"""Reward model: profit-only primitive + the weighted/z-normalized reward.
 
-The PROFIT-ONLY primitive is unchanged: :func:`compute_reward` returns the agent's raw
-profit (the 0.0–0.4 reward, no weights / no normalization). :func:`reward_components`
-returns the four un-normalized components ``{profit, revenue, market_share, loyalty}``
-for ``info['components']`` (always un-normalized — no schema bump); as of
-F-reward-post-penalty (2026-09-14) its optional ``writeoff``/``penalty`` kwargs let a
-caller fold ``World.step``'s two post-accounting P&L cost lines into ``profit`` from
-ONE built object, before either the reward path or ``info['components']`` reads it
-(see :func:`compute_reward_for_seat`).
-
-Phase 0.5 adds, ON TOP, the configurable weighted reward (selected by
-:class:`retail_simulator.core.config.RewardConfig`):
-
-* :class:`RewardNormalizer` — one :class:`RunningStats` per component, advanced ONCE
-  per tick inside ``World.step`` AFTER accounting (a deterministic post-accounting
-  fold; consumes NO RNG). It z-normalizes each component against ITS running stats
-  (update-then-read, σ-floored, warmup-/clamp-guarded) then applies the locked
-  weights. It lives in ``WorldState.reward_stats`` (one per LEARNING seat), so it
-  serializes with ``(WorldState, rng_state)`` and replays bit-for-bit. It serializes
-  to/from plain numeric triples (``count, mean, m2`` per component).
-* :func:`compute_reward_for_seat` — the mode-aware seam helper over a CALLER-BUILT
-  :class:`RewardComponents` (profit ⇒ ``components.profit`` directly; weighted ⇒ the
-  normalizer's z-sum over ``components``).
-* :func:`weighted_objective` — the pure, STATIONARY un-normalized weighted combo the
-  GATE scores (NOT the moving normalized reward).
-* :func:`reward_variance_balance` — the soft reward-health check (per-component
-  variance over a rollout + the max/min ratio; flags a zero-variance component).
-
-Pure and framework-free: numpy only.
+``compute_reward`` returns the agent's raw profit (the default reward).
+``RewardNormalizer`` z-normalizes each component against its running stats
+and applies the configured weights; it lives in ``WorldState`` so it
+serializes with the state and replays bit-for-bit.
 """
 
 from __future__ import annotations
@@ -41,22 +17,16 @@ from retail_simulator.core.config import RewardConfig
 from retail_simulator.core.demand import DemandResult
 
 _Z_CLAMP: float = 10.0
-# Standard-deviation floor: below this σ is treated as "not yet meaningful" and the
-# component's z-score is 0.0 (warmup / constant-component guard; no div-by-zero).
+# σ floor: below this the component's z-score is 0.0 (warmup / constant guard).
 _STD_EPS: float = 1e-8
 
-# Canonical component order — the keys the normalizer/objective iterate, matching
-# RewardComponents and the RewardConfig weights.
+# Canonical component order, matching RewardComponents and the RewardConfig weights.
 _COMPONENTS: tuple[str, ...] = ("profit", "revenue", "market_share", "loyalty")
 
 
 @dataclass(frozen=True)
 class RewardComponents:
-    """Un-normalized reward components for one retailer (for ``info``).
-
-    Phase 0.0 reward equals ``profit`` alone; the other three are carried for
-    inspection and for the Phase 0.5 weighted/normalized reward.
-    """
+    """Un-normalized reward components for one retailer (for ``info``)."""
 
     profit: float
     revenue: float
@@ -81,15 +51,14 @@ def reward_components(
     writeoff: float = 0.0,
     penalty: float = 0.0,
 ) -> RewardComponents:
-    """ """
+    """Build the un-normalized components; ``writeoff``/``penalty`` are folded into profit."""
     units = np.asarray(demand.units, dtype=np.float64)  # [R, K]
     total_demand = np.asarray(demand.total_demand, dtype=np.float64)  # [R]
     loyalty = np.asarray(result.new_loyalty, dtype=np.float64)  # [R, K]
 
     total_units = float(units.sum())
     agent_units = float(units[:, agent_index].sum())
-    # Demand-weighted overall share = agent units / total units across regions. Guard
-    # the no-demand tick (every region's pie 0 — e.g. priced out): report 0.0 share.
+    # Demand-weighted share = agent units / total units; 0.0 on a no-demand tick.
     overall_share = agent_units / total_units if total_units > 0.0 else 0.0
 
     region_pie = float(total_demand.sum())
@@ -97,8 +66,7 @@ def reward_components(
         # Weight each region's loyalty by its realized pie -> a value in [0, 1].
         overall_loyalty = float((total_demand @ loyalty[:, agent_index]) / region_pie)
     else:
-        # No realized demand anywhere: fall back to a plain mean across regions (still
-        # in [0, 1] since each per-region loyalty is in [0, 1]).
+        # No realized demand: fall back to a plain mean across regions.
         overall_loyalty = float(loyalty[:, agent_index].mean())
 
     profit = float(result.profit[agent_index])
@@ -116,23 +84,16 @@ def reward_components(
 
 
 def compute_reward(result: AccountingResult, agent_index: int) -> float:
-    """Phase 0.0 reward for one retailer: its raw profit this tick.
-
-    No weighting or normalization (see module docstring). Returns a plain float.
-    """
+    """Default reward for one retailer: its raw profit this tick."""
     return float(result.profit[agent_index])
 
 
 @dataclass
 class RunningStats:
-    """Welford online mean/variance — SCAFFOLD for Phase 0.5 z-normalization.
+    """Welford online mean/variance — the deterministic, serializable accumulator
 
-    Numerically stable single-pass mean/variance. NOT used by the Phase 0.0
-    reward; provided so the 0.5 per-component z-norm has a deterministic,
-    serializable accumulator (its fields can be stored in ``WorldState``).
-
-    ``variance``/``std`` use the population (biased) estimator, which is the
-    conventional choice for running normalization.
+    behind the z-normalized reward (fields can be stored in ``WorldState``).
+    Population (biased) variance estimator.
     """
 
     count: int = 0
@@ -172,7 +133,7 @@ class RunningStats:
 
 
 def _zscore(value: float, stats: RunningStats, warmup: int) -> float:
-    """ """
+    """Z-score against running stats; 0.0 during warmup or for a constant component; clamped to ±10."""
     if stats.count <= warmup:
         return 0.0
     std = stats.std
@@ -184,7 +145,7 @@ def _zscore(value: float, stats: RunningStats, warmup: int) -> float:
 
 @dataclass
 class RewardNormalizer:
-    """ """
+    """One RunningStats per component, plus the weighted z-sum."""
 
     profit: RunningStats = field(default_factory=RunningStats)
     revenue: RunningStats = field(default_factory=RunningStats)
@@ -192,7 +153,7 @@ class RewardNormalizer:
     loyalty: RunningStats = field(default_factory=RunningStats)
 
     def update_and_normalize(self, components: RewardComponents, cfg: RewardConfig) -> float:
-        """ """
+        """Fold this tick's components in (update-then-read); return the weighted z-sum."""
         warmup = cfg.normalizer_warmup
         weights = {
             "profit": cfg.weight_profit,
@@ -219,7 +180,7 @@ class RewardNormalizer:
 
 
 def weighted_objective(components: RewardComponents, cfg: RewardConfig) -> float:
-    """ """
+    """The stationary un-normalized weighted combo (profit mode: profit alone)."""
     if cfg.mode == "profit":
         return float(components.profit)
     return float(
@@ -237,7 +198,7 @@ def compute_reward_for_seat(
     *,
     seat: int | None = None,
 ) -> float:
-    """ """
+    """Mode-aware reward: profit mode reads profit; weighted mode needs a normalizer."""
     if cfg.mode == "profit":
         return float(components.profit)
     if normalizer is None:
@@ -249,7 +210,7 @@ def compute_reward_for_seat(
 def reward_variance_balance(
     component_trajectories: dict[str, list[float]],
 ) -> dict[str, float]:
-    """ """
+    """Per-component variance over a rollout, plus the max/min ratio and a zero-variance flag."""
     if not component_trajectories:
         raise ValueError("component_trajectories must not be empty")
     variances: dict[str, float] = {}
@@ -264,8 +225,8 @@ def reward_variance_balance(
     any_zero = any(v <= _STD_EPS for v in values)
 
     if min_var <= _STD_EPS:
-        # A degenerate (zero-variance) component: ratio is unbounded unless EVERY
-        # component is degenerate (then the ratio is undefined → report 0.0/1.0).
+        # Zero-variance component: ratio is unbounded unless every component is
+        # degenerate (then report 0.0).
         ratio = float("inf") if max_var > _STD_EPS else 0.0
     else:
         ratio = max_var / min_var

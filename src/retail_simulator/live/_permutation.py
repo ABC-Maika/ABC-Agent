@@ -1,7 +1,7 @@
-"""Phase 2 Slice A — the fixed agent-index permutation helper (the AC-3 invariant).
+"""Seat-indexed joint-action assembly for the live server.
 
-Module is package-internal (leading underscore); Slice B's ``server.py``
-imports it directly rather than going through ``live/__init__.py``.
+Package-internal (leading underscore); imported directly by ``server.py``
+rather than through ``live/__init__.py``.
 """
 
 from __future__ import annotations
@@ -11,12 +11,9 @@ import numpy.typing as npt
 
 from retail_simulator.core.encoding import flatten_action_space_layout
 
-# DERIVED from the current action schema's flat layout (Phase 5.0, B-1) — NOT a
-# hardcoded literal, so a future lever-registry change (a new schema version)
-# never needs a matching edit here. Every flat action vector must have this
-# width + dtype float32. The helper validates at the boundary so a malformed
-# entry surfaces here — not inside ``env.step`` with an opaque shape mismatch
-# ten frames down.
+# Derived from the current action schema's flat layout, not hardcoded.
+# Actions are validated at the boundary so a malformed entry surfaces here,
+# not deep inside ``env.step``.
 _EXPECTED_ACTION_SHAPE: tuple[int, ...] = (flatten_action_space_layout().total_dim,)
 _EXPECTED_ACTION_DTYPE: np.dtype[np.float32] = np.dtype(np.float32)
 
@@ -39,16 +36,18 @@ def permute_actions_by_seat(
     n_seats: int,
     registry_default_action: npt.NDArray[np.float32],
 ) -> tuple[dict[str, npt.NDArray[np.float32]], list[int]]:
-    """ """
+    """Assemble the joint action keyed by agent id for every seat.
+
+    Per-seat fallback: ``arrived`` → ``last_valid`` → a copy of
+    ``registry_default_action``. Returns the joint action plus the seats
+    that used a fallback.
+    """
     if n_seats < 1:
         raise ValueError(f"n_seats must be >= 1, got {n_seats}")
 
-    # Boundary validation: every action ndarray that will land in the joint
-    # action (whether from ``arrived`` or ``last_valid``) must satisfy the
-    # current action schema's shape/dtype contract. We do NOT validate the
-    # registry default — the
-    # T-A1 constant is built via ``encode_action`` and is shape/dtype-correct
-    # by construction; revalidating would be cycle waste on every tick.
+    # Validate every action landing in the joint action against the current
+    # schema. The registry default is shape/dtype-correct by construction
+    # (built via ``encode_action``), so it is not revalidated.
     for seat, action in arrived.items():
         _validate_action(seat, action)
     for seat, action in last_valid.items():
@@ -65,9 +64,7 @@ def permute_actions_by_seat(
             joint_action[agent_id] = last_valid[seat]
             missing_seats.append(seat)
         else:
-            # Tick-0 miss: the registry default is shared + read-only; copy
-            # so a downstream writer cannot corrupt the singleton through
-            # aliasing across ticks.
+            # Copy the shared registry default so a downstream writer cannot corrupt it.
             joint_action[agent_id] = registry_default_action.copy()
             missing_seats.append(seat)
 

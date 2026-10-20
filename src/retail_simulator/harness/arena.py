@@ -1,11 +1,6 @@
-"""The named 25-region arena ``CoreConfig`` — composed on the locked 2-region point.
+"""The named 25-region arena ``CoreConfig``, composed on the calibrated 2-region point.
 
-**Naming: ``arena_*``, not ``competition_*``.** The architecture note's own working
-name for this seam was ``competition_config()`` in ``harness/competition.py`` — but
-``competition_config`` already exists, in :mod:`retail_simulator.harness.parallel_gate`,
-naming something unrelated (the ladder's default self-play reward-mode config, no
-region composition at all). Every public name in this module is prefixed ``arena_`` to
-avoid colliding with that established name.
+Public names are prefixed ``arena_`` (not ``competition_*``) to avoid colliding with the established :func:`~retail_simulator.harness.parallel_gate.competition_config`.
 """
 
 from __future__ import annotations
@@ -32,7 +27,7 @@ ARENA_N_REGIONS: int = 25
 
 @dataclass(frozen=True)
 class ArenaRegionClass:
-    """ """
+    """One region class: name, base demand, segment mix."""
 
     name: str
     base_regional_demand: float
@@ -42,10 +37,7 @@ class ArenaRegionClass:
 def _swap(mix: dict[str, float], key_a: str, key_b: str) -> dict[str, float]:
     """Return a copy of ``mix`` with ``key_a``'s and ``key_b``'s shares exchanged.
 
-    Swapping two shares can never change the mix's sum (the same multiset of values
-    is redistributed across the same keys), so a valid (sums-to-1.0) input mix always
-    produces a valid output mix — the derivation :func:`_build_arena_region_classes`
-    uses for AFFLUENT/FRONTIER needs no re-normalization or re-validation.
+    Swapping two shares never changes the sum, so a valid (sums-to-1.0) input mix always produces a valid output mix — no re-normalization needed.
     """
     swapped = dict(mix)
     swapped[key_a], swapped[key_b] = mix[key_b], mix[key_a]
@@ -53,23 +45,13 @@ def _swap(mix: dict[str, float], key_a: str, key_b: str) -> dict[str, float]:
 
 
 def _build_arena_region_classes() -> tuple[ArenaRegionClass, ...]:
-    """Build the four region classes, in fixed cycle order (METRO/AFFLUENT/LOYAL/
-    FRONTIER).
+    """Build the four region classes in fixed cycle order (METRO/AFFLUENT/LOYAL/FRONTIER).
 
-    METRO and LOYAL use the calibrated config's region-0 / region-1 ``segment_mix``
-    VERBATIM (read fresh from :func:`~retail_simulator.harness.spike.
-    calibrated_spike_config`, never hardcoded, so this tracks the lock if it ever
-    moves); AFFLUENT and FRONTIER are DERIVED from the METRO mix by promoting a
-    different segment key to the heaviest share (:func:`_swap`) — quality-seeking for
-    AFFLUENT, convenience for FRONTIER. Every mix uses only the four segment keys the
-    calibrated config actually defines. Order matters: index 0 (METRO) is the class
-    :func:`arena_home_regions` seats every seat's home in; index -1 (FRONTIER, the
-    smallest) is the class :func:`arena_regions` strands at region 0.
+    METRO and LOYAL use the calibrated config's region-0 / region-1 ``segment_mix`` VERBATIM (never hardcoded, so they track the lock); AFFLUENT and FRONTIER are derived from the METRO mix by promoting a different segment to the heaviest share (:func:`_swap`). Order matters: index 0 (METRO) is the class home regions are drawn from; index -1 (FRONTIER, the smallest) is the class stranded at region 0.
     """
     calibrated_regions = calibrated_spike_config().demand.regions
-    # Defensive copies: never share a mutable dict with the calibrated config's own
-    # (frozen-dataclass, but dict-valued) ``segment_mix`` — mirrors this codebase's
-    # "never mutate the input" convention for the calibrated lock.
+    # Defensive copies: never share a mutable dict with the calibrated config's
+    # (frozen-dataclass, but dict-valued) ``segment_mix``.
     metro_mix = dict(calibrated_regions[0].segment_mix)
     loyal_mix = dict(calibrated_regions[1].segment_mix)
     return (
@@ -88,36 +70,15 @@ def _build_arena_region_classes() -> tuple[ArenaRegionClass, ...]:
     )
 
 
-# Computed once at import time (pure; reads the calibrated lock, never mutates it) —
-# every ``arena_regions`` call reuses this instead of rebuilding it.
+# Computed once at import time (pure; never mutates the calibrated lock); every
+# ``arena_regions`` call reuses this instead of rebuilding it.
 ARENA_REGION_CLASSES: tuple[ArenaRegionClass, ...] = _build_arena_region_classes()
 
 
 def arena_regions(n_regions: int = ARENA_N_REGIONS) -> tuple[RegionConfig, ...]:
     """Build the ``n_regions``-tuple of deterministic per-region demand configs.
 
-    Region 0 is a deliberately STRANDED region — present in the world (its pie is
-    drawn and observable, exactly like every other region) but never enterable:
-    ``core/affordability.py::gated_expansion_capex`` only treats ``1 <= choice <
-    n_regions`` as a legal open (``choice=0`` is the expansion lever's permanent
-    hold/no-op slot, ``core/world.py::compute_expansion_mask``), so no retailer can
-    ever OPEN a store into region 0. It uses the smallest class, FRONTIER
-    (``ARENA_REGION_CLASSES[-1]``), so the stranded pie is as small as the region
-    table allows (module docstring's "Region 0 is deliberately STRANDED").
-
-    Regions 1..n_regions-1 cycle :data:`ARENA_REGION_CLASSES` in fixed order —
-    ``class = (r - 1) mod len(ARENA_REGION_CLASSES)`` — so regions 1,
-    1 + len(ARENA_REGION_CLASSES), 1 + 2*len(ARENA_REGION_CLASSES), ... are always
-    METRO (the class every seat's home region is drawn from,
-    :func:`arena_home_regions` — always one of these ENTERABLE instances, never the
-    stranded region 0). At the default ``ARENA_N_REGIONS = 25`` this gives exactly
-    six enterable instances of each of the four classes (24 enterable regions, plus
-    the one stranded region = 25).
-
-    Purely a function of config data: no ``rng`` parameter anywhere, matching the
-    RNG-draw-order guardrail (the demand model's only per-region draw is its own
-    draw #1, a ``size=n_regions`` lognormal — building the region TABLE itself must
-    never take a draw).
+    Region 0 is deliberately STRANDED: present and observable but never enterable (``choice=0`` is the expansion lever's permanent hold/no-op slot), using the smallest class (FRONTIER). Regions 1..n_regions-1 cycle :data:`ARENA_REGION_CLASSES` as ``(r - 1) mod 4``; at the default 25 regions that is six enterable instances of each class plus the stranded region. Purely a function of config data: no RNG draw.
     """
     if not (1 <= n_regions <= N_REGIONS_MAX):
         raise ValueError(
@@ -132,8 +93,7 @@ def arena_regions(n_regions: int = ARENA_N_REGIONS) -> tuple[RegionConfig, ...]:
     return tuple(
         RegionConfig(
             base_regional_demand=region_class.base_regional_demand,
-            # A fresh dict per region: several regions share a CLASS, never a
-            # mutable dict.
+            # A fresh dict per region: several regions share a CLASS, never a mutable dict.
             segment_mix=dict(region_class.segment_mix),
         )
         for region_class in class_sequence
@@ -147,7 +107,7 @@ def arena_config(
     overhead_exponent: float | None = None,
     provided_capacity_per_store: float = 700.0,
 ) -> CoreConfig:
-    """ """
+    """The named arena config: the calibrated 2-region economics + the arena region table + wage/warehouse knobs."""
     base = calibrated_spike_config()
     wage = replace(base.wage, overhead_reference_stores=overhead_reference_stores)
     if overhead_exponent is not None:
@@ -161,7 +121,10 @@ def arena_config(
 
 
 def arena_home_regions(n_seats: int, *, n_regions: int = ARENA_N_REGIONS) -> tuple[int, ...]:
-    """ """
+    """The ``n_seats`` distinct METRO home regions (region ``1 + 4*i`` per seat).
+
+    Raises if ``n_regions`` cannot supply one METRO instance per seat.
+    """
     if n_seats < 1:
         raise ValueError(f"n_seats={n_seats} must be >= 1")
     if not (1 <= n_regions <= N_REGIONS_MAX):
@@ -172,9 +135,8 @@ def arena_home_regions(n_seats: int, *, n_regions: int = ARENA_N_REGIONS) -> tup
     n_classes = len(ARENA_REGION_CLASSES)
     last_home = 1 + n_classes * (n_seats - 1)
     if last_home >= n_regions:
-        # The exact count of METRO instances available at this n_regions: region 1,
-        # 1 + n_classes, 1 + 2*n_classes, ... below n_regions — the same cycle
-        # arena_regions itself builds, so this can never drift from reality.
+        # The exact count of METRO instances at this n_regions — the same cycle
+        # arena_regions builds, so this can never drift from reality.
         n_metro_instances = len(range(1, n_regions, n_classes))
         raise ValueError(
             f"n_seats={n_seats} needs {n_seats} distinct METRO-class home regions "
@@ -192,7 +154,7 @@ def arena_env(
     seed: int | None = None,
     **knobs: float,
 ) -> RetailParallelEnv:
-    """ """
+    """Build a :class:`RetailParallelEnv` on the arena config with ``n_seats`` learning agents."""
     from retail_simulator.envs.parallel_env import RetailParallelEnv
 
     return RetailParallelEnv(
@@ -204,7 +166,7 @@ def arena_env(
 
 
 def arena_region_table_hash(config: CoreConfig) -> str:
-    """ """
+    """Stable sha256 of the region table (demand + mix only) — the env's identity for reports."""
     payload = [
         {"base_regional_demand": region.base_regional_demand, "segment_mix": region.segment_mix}
         for region in config.demand.regions
@@ -219,18 +181,9 @@ ARENA_LOCK_PROVIDED_CAPACITY_PER_STORE: Final[float] = 700.0
 
 
 def arena_lock_config() -> CoreConfig:
-    """The named arena at the Phase-6 lock (Amendment 2, signed 2026-09-14) — the
-    three ``ARENA_LOCK_*`` constants.
+    """The named arena at the Phase-6 lock — the three ``ARENA_LOCK_*`` constants.
 
-    ``arena_config(overhead_reference_stores=ARENA_LOCK_OVERHEAD_REFERENCE_STORES,
-    overhead_exponent=ARENA_LOCK_OVERHEAD_EXPONENT,
-    provided_capacity_per_store=ARENA_LOCK_PROVIDED_CAPACITY_PER_STORE)`` — every
-    other knob (region count, every locked non-region economics constant) is
-    inherited from :func:`arena_config`'s own defaults, exactly like any other
-    ``arena_config`` call. This is the config the league driver
-    (``scripts/phase4_rl_confirm.py --env arena``) and the ladder
-    (``retail-sim league ladder --env arena``) train/rate on — see
-    :data:`ARENA_ENV_LABEL` for the matching env label.
+    Every other knob is inherited from :func:`arena_config`'s defaults. This is the config the league driver and the ladder train/rate on (see :data:`ARENA_ENV_LABEL`).
     """
     return arena_config(
         overhead_reference_stores=ARENA_LOCK_OVERHEAD_REFERENCE_STORES,
@@ -245,7 +198,7 @@ def _arena_env_label(
     overhead_exponent: float,
     provided_capacity_per_store: float,
 ) -> str:
-    """ """
+    """The env label string for the arena candidate lock."""
     return (
         f"arena ({ARENA_N_REGIONS}-region candidate lock "
         f"s={overhead_reference_stores:g} e={overhead_exponent:g} "
@@ -264,19 +217,10 @@ ARENA_BALANCED_PROVIDED_CAPACITY_PER_STORE: Final[float] = 300.0
 ARENA_BALANCED_CREDIT_LIMIT: Final[float] = 5000.0
 ARENA_BALANCED_OVERDRAFT_RATE: Final[float] = 0.03
 #
-# The knob now equals its lock-inherited default, but the constant, the
-# ``dataclasses.replace`` override below and the ``writeoff_frac_max`` term
-# in :func:`_arena_balanced_env_label` are all KEPT regardless: an explicit,
-# named override (rather than silent inheritance) lets a future lock
-# amendment be caught here instead of silently drifting the balanced
-# world's write-off ceiling, and keeps :data:`ARENA_BALANCED_ENV_LABEL` (and
-# therefore the default ``ladder_id``) moving whenever this knob does,
-# exactly as the other three do. Every other MECHANIC 2 knob stays exactly
-# as the lock has it: ``writeoff_frac_min`` 0.0, ``writeoff_severity_scale``
-# 1.0, ``leader_weight_exponent`` 1.5, ``wage_own_share_coeff`` 150.0,
-# ``happiness_decay`` 0.1 — see
-# :func:`test_arena_balanced_config_inherits_everything_else_from_the_lock`
-# in ``tests/harness/test_arena.py``.
+# Explicit, named override of the lock-inherited writeoff ceiling: an amendment to the
+# lock is caught here instead of silently drifting the balanced world, and keeps
+# ARENA_BALANCED_ENV_LABEL (and therefore the default ladder_id) moving whenever this
+# knob does. Every other balanced knob stays as the lock has it.
 ARENA_BALANCED_WRITEOFF_FRAC_MAX: Final[float] = 0.05
 
 #
@@ -289,18 +233,15 @@ ARENA_BALANCED_RESTRUCTURE_DEBT_THRESHOLD: Final[float] = 5000.0
 ARENA_BALANCED_MAX_SHARE_PER_REGION: Final[float] = 0.6
 
 ARENA_BALANCED_PROMOTION_CONTEST_WEIGHT: Final[float] = 1.0
-# K-arm-v4-promotion-combo: the per-unit promotion discount cost, dropped to 0.0
-# (from the ``PromotionConfig`` class default 0.009) -- see the block comment above.
+# Per-unit promotion discount cost, dropped to 0.0 (class default is 0.009).
 ARENA_BALANCED_PROMO_COST_PER_UNIT: Final[float] = 0.0
-# K-arm-v4-promotion-combo: the intertemporal stockpile build rate, dropped to 0.0
-# (from the ``PromotionConfig`` class default 0.17) -- see the block comment above.
-# ``stockpile_decay`` is deliberately left at its class default (0.7): at build 0.0
-# the seated stockpile is always 0, so decay is moot.
+# Stockpile build rate, dropped to 0.0 (class default is 0.17); with build 0.0 the seated
+# stockpile is always 0, so ``stockpile_decay`` stays at its class default (moot).
 ARENA_BALANCED_STOCKPILE_BUILD: Final[float] = 0.0
 
 
 def arena_balanced_config() -> CoreConfig:
-    """ """
+    """The arena-balanced config: the lock with credit/writeoff/restructure, share-cap, and promotion rebalance knobs applied."""
     base = arena_lock_config()
     return replace(
         base,
@@ -346,7 +287,7 @@ def _arena_balanced_env_label(
     promo_cost_per_unit: float,
     stockpile_build: float,
 ) -> str:
-    """ """
+    """The env label string for the arena-balanced config."""
     label = (
         f"arena-balanced ({ARENA_N_REGIONS}-region rebalance "
         f"cap={provided_capacity_per_store:g} credit={credit_limit:g} "

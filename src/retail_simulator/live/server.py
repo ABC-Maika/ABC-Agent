@@ -1,14 +1,11 @@
-"""Phase 2 Slice B T-B2 — the asyncio WebSocket server (heart of Slice B).
+"""The asyncio WebSocket server.
 
-The THIRD transport over the single ``World.step`` seam: this module hosts ONE
-:class:`RetailParallelEnv` per game and drives ``env.step`` on a wall-clock
-schedule, accepting joint actions from N remote :class:`LiveClient` connections.
-Mirrors the relationship ``envs/parallel_env.py`` has to ``core/`` — the seam
-is called exactly once per tick; no economics are reimplemented here.
-
-Single-game-per-process discipline: one :func:`serve_game` call drives one
-game from registration through final scores. Phase 2.1+ may grow to a
-multi-game daemon if/when wanted.
+The third transport over the single ``World.step`` seam: hosts one
+:class:`RetailParallelEnv` per game, drives ``env.step`` on a wall-clock
+schedule, and accepts joint actions from N remote :class:`LiveClient`
+connections. The seam is called exactly once per tick; no economics are
+reimplemented here. One :func:`serve_game` call drives one game from
+registration through final scores.
 """
 
 from __future__ import annotations
@@ -46,12 +43,9 @@ from retail_simulator.live.protocol import (
 from retail_simulator.live.replay import ActionLogRecord, ReplayManifest
 
 if TYPE_CHECKING:
-    # Type-only import; ``websockets`` is paid for only inside :func:`serve_game`.
-    # The ``WebSocketServerProtocol`` symbol moved between websockets versions
-    # (12 keeps it at ``websockets.server.WebSocketServerProtocol`` AND at
-    # ``websockets.legacy.server.WebSocketServerProtocol``); we type the
-    # parameter as ``Any`` at runtime and only TYPE_CHECKING-import the public
-    # name so the import is robust across the pinned ``>=12,<14`` range.
+    # Type-only import; ``websockets`` is paid for only inside serve_game. The symbol moved
+    # between websockets versions, so the parameter is typed Any at runtime and only the
+    # public name is TYPE_CHECKING-imported (robust across the pinned >=12,<14 range).
     from websockets.server import WebSocketServerProtocol  # noqa: F401
 
 _log = logging.getLogger("retail_simulator.live.server")
@@ -65,11 +59,9 @@ _log = logging.getLogger("retail_simulator.live.server")
 class ServeConfig:
     """Configuration for one live game; built by the CLI and handed to :func:`serve_game`.
 
-    All fields are required at construction time (no defaults) so the CLI
-    surfaces every choice the operator made; defaulting belongs in the CLI
-    layer, not here. ``token=None`` means the ``--no-auth`` flag was set;
-    ``tick_interval_seconds=0.0`` is the CI fast mode (no wall-clock sleep
-    between ticks); ``npc_archetypes=()`` is the F3-A all-remote mode.
+    All fields are required so the CLI surfaces every operator choice. ``token=None``
+    is ``--no-auth``; ``tick_interval_seconds=0.0`` is CI fast mode;
+    ``npc_archetypes=()`` is the all-remote mode.
     """
 
     n_agents: int
@@ -87,13 +79,10 @@ class ServeConfig:
 
 @dataclass(frozen=True)
 class ServeResult:
-    """Outcome of one :func:`serve_game` call; the operator/CLI consumes this.
+    """Outcome of one :func:`serve_game` call.
 
-    ``exit_status`` mirrors a Unix exit code: ``0`` is a clean game (every
-    tick stepped, FinalScores broadcast); ``1`` is a registration timeout
-    (fewer than ``n_agents`` clients connected in the window); ``2`` is any
-    other unrecoverable error (bound to grow as Phase 2.1 surfaces more
-    failure modes).
+    ``exit_status`` mirrors a Unix exit code: ``0`` clean game, ``1`` registration
+    timeout, ``2`` any other unrecoverable error.
     """
 
     game_id: str
@@ -112,11 +101,10 @@ class ServeResult:
 
 @dataclass
 class _ClientState:
-    """Per-connection mutable state held by the server during one game.
+    """Per-connection mutable state held by the server during one game (keyed by seat_index).
 
-    Keyed by ``seat_index`` in the server's ``_clients`` dict. ``websocket`` is
-    typed as ``Any`` because the websockets server protocol class is only
-    imported under :data:`TYPE_CHECKING` (the lazy-import contract).
+    ``websocket`` is typed ``Any``: the websockets server protocol class is only
+    imported under :data:`TYPE_CHECKING`.
     """
 
     seat_index: int
@@ -133,13 +121,7 @@ class _ClientState:
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
-    """Write ``text`` to ``path`` atomically via a sibling ``.tmp`` + ``os.replace``.
-
-    Mirrors the Slice 1.5 FrozenPolicyPool manifest write: a crash mid-write
-    leaves either the prior contents or the new contents — never a partial
-    file. The temp file is in the same directory so ``os.replace`` is a
-    same-filesystem rename (atomic on POSIX).
-    """
+    """Write ``text`` to ``path`` atomically (sibling ``.tmp`` + ``os.replace``: a crash leaves either the prior or the new contents, never a partial file)."""
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, path)
@@ -148,14 +130,8 @@ def _atomic_write_text(path: Path, text: str) -> None:
 def _flatten_action_mask(action_mask: Any) -> list[float] | None:
     """Flatten the seam's per-lever ``action_mask`` dict into the wire's flat list.
 
-    The seam emits ``info['action_mask']`` as either ``None`` or a dict whose
-    values are numpy bool arrays (e.g. ``{'expansion': array([True, False]),
-    'automation': array([True, True, True])}``). The wire format (per the
-    protocol's ``ObservationMessage.action_mask: list[float] | None``) is a
-    single flat list of 0.0/1.0 floats. We concatenate the dict's per-key
-    arrays in sorted-key order so the layout is deterministic across runs.
-
-    Returns ``None`` if the seam's mask is ``None`` (some legacy paths).
+    Concatenates the per-key arrays in sorted-key order (deterministic layout).
+    Returns ``None`` if the seam's mask is ``None``.
     """
     if action_mask is None:
         return None
@@ -170,14 +146,7 @@ def _flatten_action_mask(action_mask: Any) -> list[float] | None:
 
 
 def _coerce_components(info: dict[str, Any]) -> dict[str, float]:
-    """Pull the reward ``components`` dict out of the seam's info and coerce to floats.
-
-    The seam emits ``info['components'] = RewardComponents.as_dict()`` after
-    a step (absent at reset). The wire format requires ``dict[str, float]``;
-    numpy scalar types are tolerated by the protocol layer's ``isinstance``
-    check (numpy floats are subclasses of ``float``), but we float-coerce
-    explicitly for hygiene + future-proofing.
-    """
+    """Pull the reward ``components`` dict out of the seam's info and coerce to floats."""
     raw = info.get("components")
     if not isinstance(raw, dict):
         return {}
@@ -187,13 +156,9 @@ def _coerce_components(info: dict[str, Any]) -> dict[str, float]:
 def _jsonsafe_info(info: dict[str, Any]) -> dict[str, Any]:
     """Strip the seam's info dict of non-JSON-safe values for the wire.
 
-    The seam's per-agent info carries numpy bool arrays (``action_mask``),
-    numpy scalar floats (DX flat metrics), and nested dicts. The wire's
-    :class:`ObservationMessage.info` field is ``dict[str, Any]`` but
-    effectively must be JSON-safe. We drop the ``action_mask`` (it has its
-    own dedicated wire field) and the ``components`` (ditto), and coerce
-    numpy scalars to Python floats / ints / strings. Anything we can't
-    serialize is silently dropped — the wire is for display, not authority.
+    Drops ``action_mask`` and ``components`` (they have dedicated wire fields),
+    coerces numpy scalars to Python types, and silently drops anything else — the
+    wire is for display, not authority.
     """
     safe: dict[str, Any] = {}
     for key, value in info.items():
@@ -211,19 +176,17 @@ def _jsonsafe_info(info: dict[str, Any]) -> dict[str, Any]:
             safe[key] = bool(value)
         elif value is None:
             safe[key] = None
-        # Else: silently drop unsupported types (e.g. tuples, ndarrays) — the
-        # wire is operator-display; structured data goes through the protocol's
-        # dedicated fields (observation, action_mask, components).
+        # Else: silently drop unsupported types — the wire is operator-display; structured data
+        # goes through the protocol's dedicated fields.
     return safe
 
 
 class _ActionLogWriter:
-    """ """
+    """Per-tick JSONL action-log writer (append + flush per record)."""
 
     def __init__(self, path: Path) -> None:
         self._path = path
-        # ``buffering=1`` is line-buffered text mode; combined with the explicit
-        # ``flush()`` per write, a crash leaves the file with complete lines.
+        # Line-buffered text mode + explicit flush per write: a crash leaves complete lines.
         self._fh = path.open("a", encoding="utf-8", buffering=1)
 
     def write_record(self, record: ActionLogRecord) -> None:
@@ -249,35 +212,31 @@ class _ActionLogWriter:
 
 @dataclass
 class _GameServer:
-    """Per-game state machine. One instance per :func:`serve_game` invocation.
+    """Per-game state machine; one instance per :func:`serve_game` invocation.
 
-    Holds the env, the connected-clients dict, the action-log writer, the
-    tick scheduler anchor, and the running per-seat reward accumulators
-    used to compute :class:`FinalScores`. NOT exposed in ``__init__.py`` —
-    callers go through :func:`serve_game`.
+    Holds the env, the connected-clients dict, the action-log writer, and the
+    running per-seat reward accumulators used to compute :class:`FinalScores`.
+    Callers go through :func:`serve_game`.
     """
 
     config: ServeConfig
     game_id: str
     run_dir: Path
     env: RetailParallelEnv
-    # ``possible_agents`` mirrored to a list[str] for direct lookup. The
-    # parallel env's ``possible_agents`` is the authoritative ordering.
+    # ``possible_agents`` mirrored to a list[str]; the env's ordering is authoritative.
     agent_ids: list[str] = field(default_factory=list)
     # seat_index -> _ClientState; populated during the registration window.
     clients: dict[int, _ClientState] = field(default_factory=dict)
     # The action-log writer; opened in serve_game(), closed at the end.
     action_log: _ActionLogWriter | None = None
-    # Most-recent per-agent obs / reward / info (carried between ticks so
-    # the next tick's broadcast carries the last step's reward).
+    # Most-recent per-agent obs / reward / info (carried between ticks).
     current_obs: dict[str, npt.NDArray[np.float32]] = field(default_factory=dict)
     current_rewards: dict[str, float] = field(default_factory=dict)
     current_infos: dict[str, dict[str, Any]] = field(default_factory=dict)
     cumulative_score_per_seat: dict[int, float] = field(default_factory=dict)
     # Per-seat per-component cumulative breakdown (for FinalScores).
     cumulative_components_per_seat: dict[int, dict[str, float]] = field(default_factory=dict)
-    # Per-tick wall-clock variance samples; populated only when
-    # ``tick_interval_seconds > 0`` (fast mode skips the schedule check).
+    # Per-tick wall-clock variance samples (fast mode skips the schedule check).
     tick_variance_samples: list[float] = field(default_factory=list)
     # Set when registration completes (all N clients in).
     registration_complete: asyncio.Event = field(default_factory=asyncio.Event)
@@ -291,12 +250,7 @@ class _GameServer:
 
 
 async def _send_error_and_close(websocket: Any, error_kind: str, message: str) -> None:
-    """Send an :class:`ErrorMessage` and close the connection (best-effort).
-
-    Used at every fatal-boundary exit (Hello timeout, protocol mismatch, auth
-    failure, registration timeout). Swallows ``ConnectionClosed`` because the
-    far side may have already gone away.
-    """
+    """Send an :class:`ErrorMessage` and close the connection (best-effort; swallows ConnectionClosed)."""
     try:
         await websocket.send(
             ErrorMessage(error_kind=error_kind, message=message, recoverable=False).to_json()
@@ -317,14 +271,11 @@ async def _handle_registration(
 ) -> None:
     """One ``websockets.serve`` handler invocation: handshake + seat assignment.
 
-    Awaits the client's :class:`Hello` frame (with a short timeout so a stuck
-    client does not consume the whole registration window), validates protocol
-    version + token, assigns the next available seat, sends :class:`SeatAssigned`,
-    parks the handler until the game ends (the per-tick loop drives all I/O
-    on the connection after this point via the shared ``server.clients`` dict).
-
-    The handler returning early implies the connection was rejected;
-    :func:`websockets.serve` will close the socket on return.
+    Awaits the client's :class:`Hello` frame (short timeout), validates protocol
+    version + token, assigns the next available seat, sends
+    :class:`SeatAssigned`, then parks until the socket closes (the per-tick loop
+    drives all I/O after this point). Returning early implies the connection was
+    rejected.
     """
     # 1. Read the Hello frame under a short timeout.
     try:
@@ -410,9 +361,8 @@ async def _handle_registration(
         if len(server.clients) == server.config.n_agents:
             server.registration_complete.set()
 
-    # 7. Send SeatAssigned (after the lock is released — the assignment is
-    #    durable; the send may fail without affecting the seat plan, and the
-    #    per-tick loop will surface a broken connection as a missed deadline).
+    # 7. Send SeatAssigned (after the lock is released — the assignment is durable; a
+    #    failed send surfaces later as a missed deadline).
     seat_assigned = SeatAssigned(
         seat_index=seat_index,
         n_agents=server.config.n_agents,
@@ -436,13 +386,9 @@ async def _handle_registration(
         hello.client_name,
     )
 
-    # 8. Park the handler until the game ends. The per-tick loop reuses this
-    #    same websocket via the shared ``server.clients[seat].websocket`` slot
-    #    to send obs + receive actions. We MUST observe connection close
-    #    promptly (not after a 3600 s sleep) so ``websockets.serve()``'s
-    #    ``wait_closed()`` can complete at game end — the handler returns
-    #    when the underlying socket closes (FinalScores → close from the
-    #    per-tick loop, or a client-initiated disconnect).
+    # 8. Park the handler until the game ends: the per-tick loop reuses this websocket via
+    #    server.clients[seat].websocket. The handler returns when the socket closes so
+    #    websockets.serve()'s wait_closed() can complete at game end.
     await websocket.wait_closed()
 
 
@@ -456,15 +402,11 @@ async def _receive_action_for_seat(
     expected_tick: int,
     timeout_seconds: float,
 ) -> tuple[int, npt.NDArray[np.float32]] | None:
-    """Receive one :class:`ActionMessage` for the given seat within the deadline.
+    """Receive one on-tick :class:`ActionMessage` for the seat within the deadline.
 
-    Returns ``(seat_index, action_ndarray)`` on a valid, on-tick action;
-    ``None`` on timeout or any peer error (the caller treats absence as a
-    missed deadline and the fixed-agent-index permutation fills the gap).
-
-    Late actions (``tick != expected_tick``) and malformed frames are logged
-    WARN and treated as "no action this tick" — the next tick's receive will
-    pick up a fresh frame.
+    Returns ``(seat_index, action)`` on a valid, on-tick action; ``None`` on
+    timeout, peer error, late tick, or malformed frame (the caller treats absence
+    as a missed deadline).
     """
     try:
         raw = await asyncio.wait_for(client.websocket.recv(), timeout=timeout_seconds)
@@ -515,35 +457,25 @@ async def _collect_actions_for_tick(
 ) -> dict[int, npt.NDArray[np.float32]]:
     """Race N per-seat receivers against the wall-clock deadline.
 
-    Returns the ``{seat_index: action_ndarray}`` dict of seats that submitted
-    a valid action within the deadline. Missing seats are filled later by
-    :func:`permute_actions_by_seat` (last-valid or registry-default).
-
-    Each receiver is its own task so a slow seat does not block a fast one;
-    the outer :func:`asyncio.gather` (with ``return_exceptions=True``) joins
-    them all and returns whichever completed before the deadline.
+    Returns ``{seat_index: action}`` for the seats that submitted in time; missing
+    seats are filled later by :func:`permute_actions_by_seat`. Each receiver is
+    its own task so a slow seat does not block a fast one.
     """
     arrived: dict[int, npt.NDArray[np.float32]] = {}
     if deadline_seconds <= 0.0:
-        # Fast mode (--tick-interval=0): a per-seat read can still complete
-        # immediately, but we should not block. Give each seat one quick
-        # opportunity (zero-timeout) and move on; a real implementation in
-        # fast mode is dominated by the in-process action-pump anyway.
-        # We use a tiny positive timeout so an action that arrived during
-        # the prior step's broadcast still lands here.
+        # Fast mode (--tick-interval=0): give each seat one zero-timeout opportunity so an
+        # action that arrived during the prior broadcast still lands; do not block.
         deadline_seconds = 0.0
     tasks = [
         asyncio.create_task(_receive_action_for_seat(client, tick, max(deadline_seconds, 0.0)))
         for client in server.clients.values()
     ]
-    # Wait for either all tasks to complete or the deadline to elapse. The
-    # per-receiver ``asyncio.wait_for`` already enforces the deadline; the
-    # outer gather just joins. ``return_exceptions=True`` shields the gather
-    # from a per-task exception (rare; logged at the receiver level).
+    # Wait for all tasks or the deadline (the per-receiver wait_for enforces the deadline;
+    # gather just joins). return_exceptions=True shields from a per-task exception.
     results = await asyncio.gather(*tasks, return_exceptions=True)
     for outcome in results:
         if isinstance(outcome, BaseException):
-            # The per-receiver path logs already; nothing to add here.
+            # The per-receiver path already logs; nothing to add here.
             continue
         if outcome is None:
             continue
@@ -582,11 +514,9 @@ def _compute_winner(cumulative_score_per_seat: dict[int, float]) -> int | None:
 
 
 def _compute_wall_clock_variance(samples: list[float], tick_interval_seconds: float) -> float:
-    """Return the std-dev of per-tick elapsed times divided by the configured interval.
+    """Std-dev of per-tick elapsed times divided by the configured interval.
 
-    Returns ``0.0`` when fast mode (``tick_interval_seconds == 0``) was used —
-    there is no scheduled cadence to deviate from. Returns ``0.0`` when the
-    sample set is too small (< 2) to estimate variance.
+    Returns ``0.0`` in fast mode or when there are fewer than 2 samples.
     """
     if tick_interval_seconds <= 0.0:
         return 0.0
@@ -598,12 +528,7 @@ def _compute_wall_clock_variance(samples: list[float], tick_interval_seconds: fl
 async def _broadcast_observation(
     server: _GameServer, tick: int, seat: int, deadline_ns: int
 ) -> None:
-    """Send one :class:`ObservationMessage` to one connected client.
-
-    Pulls the seat's current obs / reward / info / action_mask out of the
-    server's state. Swallows ``ConnectionClosed`` so a single broken peer does
-    not abort the whole broadcast (the dead seat just misses its next tick).
-    """
+    """Send one :class:`ObservationMessage` to one connected client; a broken peer just misses its tick."""
     client = server.clients[seat]
     agent_id = server.agent_ids[seat]
     obs_array = server.current_obs[agent_id]
@@ -640,18 +565,10 @@ async def _broadcast_observation(
 async def serve_game(config: ServeConfig) -> ServeResult:
     """Run one game lifecycle end-to-end; return a :class:`ServeResult`.
 
-    The async entry point the CLI awaits. Lazy-imports ``websockets`` so
-    ``import retail_simulator.live.server`` stays cheap. Opens a listener on
-    ``(host, port)``, runs the registration window, drives the per-tick loop,
-    broadcasts FinalScores, writes the manifest + action log, returns a
-    :class:`ServeResult` with the exit status.
-
-    The single-game-per-process discipline keeps the MVP simple — one call
-    drives one game; the websockets server is closed at the end so the
-    function may be re-invoked for a fresh game.
-
-    Raises :class:`ImportError` (with a clear message) when the ``[serve]``
-    extra is not installed.
+    Lazy-imports ``websockets`` (raises :class:`ImportError` with an install hint
+    when the ``[serve]`` extra is missing). Opens a listener, runs the registration
+    window, drives the per-tick loop, broadcasts FinalScores, writes the manifest
+    + action log.
     """
     try:
         import websockets
@@ -750,15 +667,13 @@ async def serve_game(config: ServeConfig) -> ServeResult:
         # ---- 4. Per-tick loop.
         game_start_monotonic = time.monotonic()
         tick_interval = config.tick_interval_seconds
-        # Per-tick action deadline = 80% of the tick interval (gives the
-        # server 20% to step + broadcast). In fast mode this collapses to 0.
+        # Per-tick action deadline = 80% of the tick interval (leaves 20% to step + broadcast); 0 in fast mode.
         per_tick_deadline_seconds = tick_interval * 0.8 if tick_interval > 0 else 0.0
 
         for tick in range(config.n_ticks):
             tick_start_monotonic = time.monotonic()
             # ---- 4a. Broadcast the current obs (reset obs at t=0; step obs at t>0).
-            # The deadline_ns on the wire is the absolute monotonic deadline by
-            # which the client must submit its action for THIS tick.
+            # deadline_ns is the absolute monotonic deadline for THIS tick's action.
             broadcast_at_ns = time.monotonic_ns()
             deadline_ns = broadcast_at_ns + int(per_tick_deadline_seconds * 1e9)
             broadcast_tasks = [
@@ -770,18 +685,15 @@ async def serve_game(config: ServeConfig) -> ServeResult:
             # ---- 4b. Collect actions from each seat (race against the deadline).
             arrived = await _collect_actions_for_tick(server, tick, per_tick_deadline_seconds)
 
-            # ---- 4c. Permute by seat (AC-3 invariant). Update last_valid_action
-            # for arrived seats so the next tick's miss falls back to THIS
-            # tick's action (not an earlier one). The permutation helper
-            # validates shape + dtype and raises ValueError on a bad submission.
+            # ---- 4c. Permute by seat. Arrived seats update last_valid_action so the next
+            # tick's miss falls back to THIS tick's action.
             last_valid: dict[int, npt.NDArray[np.float32]] = {
                 seat: client.last_valid_action
                 for seat, client in server.clients.items()
                 if client.last_valid_action is not None
             }
-            # The AC-3 contract: joint_action MUST go through permute_actions_by_seat
-            # regardless of arrival order. This is the load-bearing determinism
-            # primitive — every other place the joint_action is built is wrong.
+            # joint_action MUST go through permute_actions_by_seat regardless of arrival order
+            # (the load-bearing determinism primitive).
             joint_action, missing_seats = permute_actions_by_seat(
                 arrived=arrived,
                 last_valid=last_valid,
@@ -815,7 +727,7 @@ async def serve_game(config: ServeConfig) -> ServeResult:
                 for comp_name, comp_value in components.items():
                     seat_components[comp_name] = seat_components.get(comp_name, 0.0) + comp_value
 
-            # ---- 4e. Write the action-log record (the AC-4 substrate).
+            # ---- 4e. Write the action-log record.
             log_record = ActionLogRecord(
                 tick=tick,
                 joint_action={
@@ -892,7 +804,7 @@ async def serve_game(config: ServeConfig) -> ServeResult:
                     exc,
                 )
 
-        # Write the serve_summary.json artifact (operator-readable; AC-2 audit).
+        # Write the serve_summary.json artifact (operator-readable).
         serve_summary = {
             "game_id": game_id,
             "rounds_completed": rounds_completed,

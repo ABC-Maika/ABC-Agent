@@ -1,10 +1,7 @@
-"""Resolved domain parameters for the sim core (framework-free dataclasses).
+"""Resolved domain parameters for the sim core (pure dataclasses, no behavior).
 
-RL-wrapper concerns (``gamma``, ``max_episode_steps``, truncation) deliberately
-live **outside** core — see :data:`MAX_EPISODE_STEPS_DEFAULT` for the documented
-hint constant that envs/ should consume.
-
-No numpy, no behavior — pure data.
+RL-wrapper concerns (gamma, episode length) live outside core; envs/ reads the
+MAX_EPISODE_STEPS_DEFAULT hint constant exposed here.
 """
 
 from __future__ import annotations
@@ -20,14 +17,12 @@ from retail_simulator.core.state import (
     SegmentParams,
 )
 
-# Scoring window / training horizon hint (~2 simulated years). This is an RL
-# wrapper concern (TimeLimit truncation) and MUST NOT be baked into core stepping
-# logic; exposed here only so envs/ has a single documented default to read.
+# Training horizon hint (~2 simulated years); an RL-wrapper concern, not core.
 MAX_EPISODE_STEPS_DEFAULT: int = 104
 
 
 def _validate_segment_mix(segment_mix: dict[str, float]) -> None:
-    """ """
+    """Validate a segment_mix dict: known keys, non-negative shares, sums to 1.0."""
     if not segment_mix:
         raise ValueError("segment_mix must not be empty")
     unknown = set(segment_mix) - SEGMENT_KEYS
@@ -45,7 +40,7 @@ def _validate_segment_mix(segment_mix: dict[str, float]) -> None:
 
 @dataclass(frozen=True)
 class RegionConfig:
-    """ """
+    """Per-region demand size and segment population mix."""
 
     base_regional_demand: float = 1000.0
     segment_mix: dict[str, float] = field(
@@ -63,17 +58,13 @@ class RegionConfig:
 
 @dataclass(frozen=True)
 class DemandConfig:
-    """ """
+    """Demand size, elasticity, noise, and the list of regions."""
 
     base_regional_demand: float = 1000.0
-    # Overall price elasticity of total regional demand (negative: higher price
-    # shrinks the pie). Per-segment attractiveness weights live in SegmentParams.
+    # Price elasticity of total regional demand (negative: higher price shrinks the pie).
     price_elasticity: float = -1.5
     noise_sigma: float = 0.05
-    # Population shares by segment key; must sum to 1.0. Kept as the region-0
-    # default / single-region fallback. The Phase 0.4 default adds the 4th
-    # brand-loyal segment so the loyalty moat has a population (loyalty stays
-    # inert in demand until Slice B turns beta_loyalty on).
+    # Segment population shares (must sum to 1.0); region-0 default / single-region fallback.
     segment_mix: dict[str, float] = field(
         default_factory=lambda: {
             PRICE_SENSITIVE: 0.4,
@@ -82,10 +73,7 @@ class DemandConfig:
             BRAND_LOYAL: 0.15,
         }
     )
-    # NEW (Phase 0.4): per-region overrides. Empty => single region from the
-    # scalar fields above (0.3 behavior). The default is TWO regions: region 0 at
-    # full size with the 4-segment mix, region 1 ASYMMETRIC (smaller +
-    # brand-loyal-heavy). Exact numbers DELEGATED to the sweep tuning loop.
+    # Per-region overrides; the default is two regions, region 1 smaller and brand-loyal-heavy.
     regions: tuple[RegionConfig, ...] = field(
         default_factory=lambda: (
             RegionConfig(
@@ -108,10 +96,7 @@ class DemandConfig:
             ),
         )
     )
-    # MECHANIC 5 (regional share ceiling — see the class docstring above): the
-    # maximum per-region aggregated choice share any one present retailer may
-    # hold. Default 1.0 ⇒ OFF (the byte-identity anchor — ``resolve_demand``
-    # does not even call the ceiling helper at this default).
+    # Max per-region share one retailer may hold; 1.0 = off.
     max_share_per_region: float = 1.0
 
     def __post_init__(self) -> None:
@@ -126,18 +111,11 @@ class DemandConfig:
 
 @dataclass(frozen=True)
 class MarketingConfig:
-    """ """
+    """Marketing (spend_fraction lever) cost parameters."""
 
     cost_per_unit_spend: float = 200.0
     decay: float = 0.3
-    # MECHANIC 6 candidate (convex marketing cost — see the class docstring above):
-    # convexity of marketing cost in spend_fraction. Default 1.0 ⇒ LINEAR / OFF (the
-    # byte-identity anchor — ``core/demand.py`` executes the exact pre-existing
-    # linear expression at this default, never ``spend_fraction ** 1.0``, which is
-    # not guaranteed bit-identical). A value > 1.0 makes a high spend_fraction cost
-    # disproportionately more at the margin (cost = spend_fraction**exponent *
-    # cost_per_unit_spend), turning "max marketing every round" from a dominant
-    # fixed choice into an interior, opponent/state-dependent optimum.
+    # Convexity of marketing cost in spend_fraction; 1.0 = linear (off).
     marketing_cost_exponent: float = 1.0
 
     def __post_init__(self) -> None:
@@ -149,49 +127,21 @@ class MarketingConfig:
 
 @dataclass(frozen=True)
 class AssortmentConfig:
-    """Parameters of the contemporaneous assortment-breadth lever (Phase 0.2).
-
-    Assortment is a per-tick SETTING (like price), not an investment (like
-    marketing): the decoded ``assortment`` in [0, 1] enters THIS tick's utility
-    (+beta_assortment_s * assortment) and costs THIS tick. There is no seated
-    state and no recurrence.
-    """
+    """Assortment lever: a per-tick setting like price (no seated state), with its cost."""
 
     assortment_cost_per_unit: float = 120.0
 
 
 @dataclass(frozen=True)
 class PromotionConfig:
-    """ """
+    """Promotion lever: per-unit margin compression and the consumer stockpile."""
 
-    # CONTEMPORANEOUS margin compression. Money charged per unit MOVED per unit of
-    # promotion: promo_cost_per_unit * promotion_i * units_i is the opex add-on this
-    # tick. Funded per unit (a discount you pay on what you sell), so a promo that
-    # moves more units costs more — this is what makes constant-max promo a real
-    # margin trade-off, not a free demand boost.
-    # CALIBRATED (2026-05-24) against the 4-lever sweep: at the original seeds
-    # (0.15 / 1.0 / 0.5) a sustained promo never paid (promotion-inert) — the
-    # per-unit cost + stockpile debt over-dominated the lift. Weakening both the
-    # cost and the stockpile build, and slowing decay, yields a non-degenerate
-    # interior optimum (~0.6) where a sustained promo pays its way.
-    # RE-CALIBRATED (2026-05-25, Phase 0.4): the 4th (brand-loyal) segment + the
-    # asymmetric loyal-heavy region 1 dropped the share-weighted promo lift
-    # (blended beta_promotion ~1.0 -> ~0.77) and loyalty now captures the
-    # brand-loyal segment, so the 0.3 friction left promotion inert again.
-    # Lowering the cost + stockpile build restores an interior promo optimum.
+    # Promo is a variable cost of sales: cost per unit sold per unit of promotion.
+    # Tuned so sustained promotion has an interior optimum (not free, not inert).
     promo_cost_per_unit: float = 0.009
     stockpile_build: float = 0.17
     stockpile_decay: float = 0.7
-    # MECHANIC-6b candidate (promotion contest — see the class docstring above):
-    # weight netting each retailer's promotion against its present rivals' mean
-    # promotion (self-excluded, per region) before the utility reads it. Default
-    # 0.0 ⇒ ABSOLUTE / OFF (the byte-identity anchor — core/demand.py executes the
-    # exact pre-existing ``bpr * promotion`` expression at this default, never a
-    # contest-form subtraction, which is not guaranteed bit-identical even though
-    # it nets to the same value at weight 0). A value > 0.0 makes the lift RELATIVE:
-    # out-promoting present rivals lifts utility, matching their promotion cancels
-    # it, netting BELOW their mean pushes it negative — turning promotion from a
-    # dead absolute lever into a reactive, tit-for-tat burst weapon.
+    # Weight netting promotion against present rivals' mean (per region); 0.0 = absolute (off).
     promotion_contest_weight: float = 0.0
 
     def __post_init__(self) -> None:
@@ -213,31 +163,24 @@ class PricingConfig:
 
 @dataclass(frozen=True)
 class CostConfig:
-    """Cost structure used by the accounting engine (Wave 2)."""
+    """Cost structure used by the accounting engine."""
 
     # Cost of goods as a fraction of the base price (price_index == 1.0).
     cogs_fraction: float = 0.4
-    # Fixed operating expense charged per store per tick. Placeholder default;
-    # Wave 2 / calibration tunes this against the interior-optimum requirement.
+    # Fixed operating expense per store per tick.
     fixed_opex_per_store: float = 50.0
 
 
 @dataclass(frozen=True)
 class LoyaltyConfig:
-    """Loyalty stock dynamics: L = alpha * L + (1 - alpha) * market_share.
-
-    Accrued per-region every tick (Phase 0.4); enters the brand-loyal segment's
-    utility via ``beta_loyalty`` once loyalty-in-demand lands (Slice B). In Slice A
-    loyalty accrues but is inert in demand (``beta_loyalty = 0.0`` for all
-    segments).
-    """
+    """Loyalty stock dynamics: L = alpha * L + (1 - alpha) * market_share, accrued per region every tick."""
 
     alpha: float = 0.85
 
 
 @dataclass(frozen=True)
 class LoyaltyProgramConfig:
-    """ """
+    """Loyalty-program spend lever cost."""
 
     cost_per_unit_spend: float = 0.0
 
@@ -248,14 +191,10 @@ class LoyaltyProgramConfig:
 
 @dataclass(frozen=True)
 class ExpansionConfig:
-    """Parameters of the expansion lever (Phase 0.4).
+    """Expansion lever: opening a store in a new region costs a one-time
 
-    Expansion is DISCRETE, OPEN-ONLY/IRREVERSIBLE, CASH-GATED, and MASKED:
-    opening a store in a region the retailer is not yet present in costs a one-time
-    ``expansion_capex`` (charged once, on a valid open) and adds an ongoing
-    ``fixed_opex_per_store`` per tick (CostConfig, charged on every open store every
-    tick). The mask (cash >= capex AND not-already-present) is advisory; an invalid
-    decoded open is a deterministic no-op in ``world.step`` (charges nothing).
+    ``expansion_capex`` plus an ongoing ``fixed_opex_per_store`` per tick.
+    Open-only and cash-gated; an unaffordable open is a no-op.
     """
 
     expansion_capex: float = 5_000.0
@@ -263,12 +202,11 @@ class ExpansionConfig:
 
 @dataclass(frozen=True)
 class ResearchConfig:
-    """ """
+    """Research lever: cost and the saturating fidelity mapping."""
 
     cost_per_fidelity: float = 15.0
     noise_sigma_base: float = 0.3
-    # Saturating fidelity mapping denominator: fidelity = spend / (spend + k). k > 0 so
-    # fidelity is interior (in [0, 1), never exactly 1 even at spend = 1).
+    # Denominator of the saturating fidelity mapping; keeps fidelity < 1.
     fidelity_k: float = 0.3
 
     def __post_init__(self) -> None:
@@ -280,22 +218,16 @@ class ResearchConfig:
             raise ValueError(f"fidelity_k must be > 0, got {self.fidelity_k}")
 
     def fidelity(self, research_spend: float) -> float:
-        """ """
+        """Saturating fidelity for a given research spend: spend / (spend + k)."""
         return research_spend / (research_spend + self.fidelity_k)
 
 
 @dataclass(frozen=True)
 class SCMConfig:
-    """ """
+    """Supply-chain service: fill rate from service_level and its cost penalty."""
 
     cogs_premium: float = 0.0
-    # CALIBRATED (2026-05-26 — moved 0.7→0.5): at s=0 the agent fulfils 50% of demand
-    # (not 70%), so the cheap-supplier end is genuinely punishing — the tradeoff vs the
-    # reliable end carries enough magnitude for the constant-service curve to show a
-    # clearly interior optimum (the FREE-baseline non-degeneracy bar). No byte-identity
-    # impact: at the registry default service_level=1.0, fill_rate(1.0)=1.0 regardless
-    # of the floor (the floor only takes effect at s<1, which CoreConfig.default never
-    # produces from a free learner because cogs_premium=0 makes any service equivalent).
+    # Minimum fill rate at service_level = 0; tuned so the cheap end is genuinely punishing.
     fill_rate_floor: float = 0.5
     fill_rate_curvature: float = 1.0
     lost_sales_share_penalty: float = 0.0
@@ -316,13 +248,13 @@ class SCMConfig:
             )
 
     def fill_rate(self, service_level: float) -> float:
-        """ """
+        """Fill rate for a given service_level (floor plus linear rise)."""
         return self.fill_rate_floor + (1.0 - self.fill_rate_floor) * service_level
 
 
 @dataclass(frozen=True)
 class AutomationConfig:
-    """ """
+    """Automation tiers: one-time capex and per-tick savings per tier."""
 
     capex_per_tier: tuple[float, float, float] = (0.0, 0.0, 0.0)
     savings_per_tier: tuple[float, float, float] = (0.0, 0.0, 0.0)
@@ -369,84 +301,44 @@ class AutomationConfig:
 
 @dataclass(frozen=True)
 class WageConfig:
-    """ """
+    """Wage and recovery mechanics: affordability gate, credit line, restructuring, write-offs, overhead."""
 
-    # MECHANIC 1: affordability-clamp gate. Default False ⇒ no clamp (byte-identical).
+    # Affordability-clamp gate; False = no clamp (byte-identical).
     cash_budget_enabled: bool = False
     overdraft_rate: float = 0.0
-    # MECHANIC 1 (working-capital credit line): widens the discretionary-spend clamp's
-    # basis from ``max(cash − committed_capex, 0.0)`` to
-    # ``max(cash + credit_limit − committed_capex, 0.0)``
-    # (``core/affordability.py::compute_spend_clamp``) — a retailer can trade THROUGH a
-    # negative-cash dip on working capital instead of being permanently zombied (zero
-    # discretionary spend ⇒ zero demand effect ⇒ no way to earn back the shortfall,
-    # since bankruptcy is deferred). Shipped INERT at 0.0: the clamp's default branch
-    # executes the SAME ``max(cash − committed_capex, 0.0)`` expression, not merely a
-    # numerically-equal one (the ``overdraft_rate != 0.0`` / ``overhead_reference_stores
-    # == 1.0`` skip idiom above). Funds OPERATIONS ONLY, never expansion/automation
-    # capex — ``gated_expansion_capex``/``gated_automation_capex`` deliberately keep
-    # gating on raw ``cash`` (see their own docstrings in ``core/affordability.py``);
-    # widening what a retailer may discretionarily SPEND must never widen what it may
-    # OPEN, or credit would make growth easier, undoing the growth brake the clamp
-    # exists to create. Must be >= 0 (a limit, not a target). MAY be armed alone — with
-    # ``overdraft_rate`` at its default 0.0 the wider budget costs nothing every tick (a
-    # free credit line); only the REVERSE pairing (an armed ``overdraft_rate`` with no
-    # line to bound it) is invalid, see ``overdraft_rate`` above.
+    # Working-capital credit line: widens the spend clamp's basis by this much.
+    # Funds operations only, never expansion/automation capex. 0.0 = off.
     credit_limit: float = 0.0
     restructure_after_ticks: int = 0
-    # MECHANIC 4: how many of the seat's best CLOSEABLE regions (by seated
-    # ``last_market_share_per_region``) survive a restructuring; every other present
-    # closeable region's store is closed. Region 0 (the action-schema's stranded
-    # no-op slot — see ``core/world.py::_restructuring_survivor_regions``) is
-    # ALWAYS exempt: it never counts against this budget and is never closed. Must
-    # be >= 1 — a restructuring is a recovery path, not an exit, so it always keeps
-    # at least one closeable region. Default 1.
+    # How many of the best closeable regions survive a restructuring; region 0 is always exempt.
     restructure_keep_stores: int = 1
-    # MECHANIC 4: widens the restructuring trigger's debt line beyond ``credit_limit``
-    # alone. Default 0.0 ⇒ the line sits exactly at ``-credit_limit`` (the affordability
-    # clamp's own zombie threshold). Must be >= 0 (a widening, never a tightening, of
-    # the line beyond the clamp's own).
+    # Widens the restructuring trigger's debt line beyond -credit_limit; 0.0 = off.
     restructure_debt_threshold: float = 0.0
-    # MECHANIC 2: the rival-coupled reference-wage weight. Default 0.0 ⇒ the write-off
-    # gate is OFF on this leg ⇒ NO draw #5 (see ``writeoff_severity_scale``).
+    # Rival-coupled reference-wage weight; 0.0 = the write-off gate's rival leg is off.
     wage_coupling_coeff: float = 0.0
-    # MECHANIC 2: the own-share term weight (the non-monotone/own-size input). Default 0.
+    # Own-share term weight; 0.0 = off.
     wage_own_share_coeff: float = 0.0
     # MECHANIC 2: the required-wage intercept. Also the reset wage_level anchor.
     wage_base: float = 0.0
-    # MECHANIC 2: the write-off severity scale. Default 0.0 ⇒ the write-off gate is OFF
-    # on this leg ⇒ NO draw #5 (paired with wage_coupling_coeff above — the draw fires
-    # only when AT LEAST ONE of the two is non-zero).
+    # Write-off severity scale; 0.0 (with wage_coupling_coeff 0.0) = gate off, no draw.
     writeoff_severity_scale: float = 0.0
-    # MECHANIC 2: the bounded write-off draw range (a fraction of turnover). Default
-    # (0.0, 0.0) ⇒ the draw, when taken, is identically 0.0.
+    # Bounded write-off draw range (fraction of turnover).
     writeoff_frac_min: float = 0.0
     writeoff_frac_max: float = 0.0
-    # MECHANIC 2: the leader-weighting exponent on retailer size. Default 1.0 ⇒ plain
-    # %-of-turnover (size ** 0 == 1, no extra factor); > 1.0 taxes the biggest more.
+    # Leader-weighting exponent on retailer size; 1.0 = plain % of turnover.
     leader_weight_exponent: float = 1.0
-    # MECHANIC 2: the employee-happiness EMA rate in (0, 1]. Default 0.1 (slow). Inert
-    # at default config because happiness only DROPS when required_wage > paid_wage, and
-    # at default config (all-zero wage coeffs/base) required == paid == 0 ⇒ happiness
-    # stays 1.0; the write-off draw is not taken regardless.
+    # Employee-happiness EMA rate; inert at default config (required == paid == 0).
     happiness_decay: float = 0.1
     # MECHANIC 3: the store-count threshold above which super-linear overhead bites.
     overhead_threshold_stores: float = 0.0
-    # MECHANIC 3: the overhead coefficient. Default 0.0 ⇒ the overhead line is 0
-    # (byte-identical).
+    # Overhead coefficient; 0.0 = off (byte-identical).
     overhead_superlinear_coeff: float = 0.0
     # MECHANIC 3: the overhead exponent (super-linear when > 1). Default 1.0.
     overhead_exponent: float = 1.0
     overhead_reference_stores: float = 1.0
-    # PHASE 5.0: the per-tick ``wage_spend`` lever's money scale. Once the seam
-    # (B-2) is live, ``paid_wage = wage_base + wage_spend · wage_spend_scale``.
-    # Default 0.0 ⇒ the seam is inert (``paid_wage`` stays ``wage_base``
-    # regardless of the decoded ``wage_spend`` value) — the byte-identity anchor.
+    # Money scale of the wage_spend lever; 0.0 = inert (paid_wage stays wage_base).
     wage_spend_scale: float = 0.0
-    # PHASE 5.0: divides the paid-vs-required wage gap before it drives the
-    # happiness EMA target (a smoothing knob so a small shortfall doesn't
-    # instantly saturate the target to 0). Must be > 0 (a divisor). Default 1.0
-    # ⇒ the gap is used unscaled — today's formula, byte-identical.
+    # Divides the paid-vs-required wage gap before it drives the happiness target; > 0.
     wage_shortfall_scale: float = 1.0
 
     def __post_init__(self) -> None:
@@ -510,28 +402,24 @@ class WageConfig:
 
     @property
     def writeoff_gate_active(self) -> bool:
-        """ """
+        """True when the wage write-off gate is armed."""
         return self.wage_coupling_coeff != 0.0 or self.writeoff_severity_scale != 0.0
 
     @property
     def restructuring_gate_active(self) -> bool:
-        """ """
+        """True when the restructuring gate is armed."""
         return self.restructure_after_ticks > 0
 
 
 @dataclass(frozen=True)
 class SupplierConfig:
-    """ """
+    """Supplier contention: per-region capacity split among present retailers by service."""
 
-    # MASTER GATE. Default False ⇒ no contention (byte-identical).
+    # Master gate; False = no contention (byte-identical).
     supplier_contention_enabled: bool = False
-    # Per-region supplier capacity (total fulfillable units across present retailers).
-    # Default inf ⇒ the regional demand total NEVER exceeds it ⇒ contention never binds
-    # (byte-identical) even if the gate were flipped on. The scenario sets a finite value.
+    # Per-region supplier capacity; inf = contention never binds.
     supplier_capacity: float = float("inf")
-    # The priority exponent on ``service_level``: priority weight = service_level **
-    # preference_sharpness. Default 1.0 (linear in service). 0.0 ⇒ equal shares
-    # (no preference); > 1.0 sharpens the favor toward high-service retailers.
+    # Priority exponent on service_level; 1.0 = linear, 0.0 = equal shares.
     preference_sharpness: float = 1.0
 
     def __post_init__(self) -> None:
@@ -543,58 +431,27 @@ class SupplierConfig:
 
 @dataclass(frozen=True)
 class WarehouseConfig:
-    """ """
+    """Warehouse throughput cap, shortfall penalty, and the warehouse_invest lever."""
 
-    # SUB-MECHANIC A: master gate for the throughput cap + spill. Default False ⇒ the
-    # ``units`` array flows untouched in ``resolve_demand`` (byte-identical).
+    # Master gate for the throughput cap and spill; False = units flow untouched (byte-identical).
     throughput_enabled: bool = False
-    # SUB-MECHANIC A: the PROVIDED warehouse throughput capacity each retailer is seated
-    # with at reset (the independent provisioning posture). Default ``inf`` ⇒ the
-    # throughput cap never binds ⇒ byte-identical. A finite value makes the cap bind for
-    # any retailer whose served demand exceeds it — so a high-footprint AGGRESSOR
-    # out-grows a uniform capacity (footprint-differentiated) without a per-seat hook.
+    # Seated warehouse capacity at reset; inf = the cap never binds.
     default_warehouse_capacity: float = float("inf")
-    # SUB-MECHANIC A (24-region arena support, see the class docstring above for the
-    # full rationale): footprint-SCALED top-up to the seated capacity above.
-    # ``effective_capacity_k = warehouse_capacity_k + provided_capacity_per_store ·
-    # stores_total_k`` (``core/demand.py``'s ``effective_warehouse_capacity`` — the
-    # ONE place this arithmetic happens). Default ``0.0`` ⇒ the helper's ``!= 0.0``
-    # guard returns ``warehouse_capacity`` UNCHANGED (byte-identical — not a "+ 0.0"
-    # copy). See ``capacity_per_store`` below for how the two knobs interact, and
-    # ``ramp_ticks`` below for how a NEWLY-opened store's contribution to THIS
-    # top-up phases in over time instead of counting in full the tick it opens.
+    # Footprint-scaled top-up: effective capacity += this * stores_total; 0.0 = off (byte-identical).
     provided_capacity_per_store: float = 0.0
-    # SUB-MECHANIC B: required capacity per store. required_capacity_k =
-    # capacity_per_store · stores_total_k. Default 0.0 ⇒ required == 0 ⇒ no shortfall.
-    # A DIFFERENT knob from ``provided_capacity_per_store`` above (required vs
-    # provided) — CONFIGURED independently, but NOT computed independently: the
-    # shortfall below is computed against that field's EFFECTIVE (boosted) capacity,
-    # not the raw seated value, so a non-degenerate penalty requires
-    # ``capacity_per_store > provided_capacity_per_store``.
+    # Required capacity per store; a shortfall is possible only when this exceeds the provided capacity.
     capacity_per_store: float = 0.0
-    # SUB-MECHANIC B: the penalty severity scale. Default 0.0 ⇒ the penalty gate is OFF
-    # ⇒ NO draw #6 (the byte-identity / draw-order anchor).
+    # Shortfall penalty severity scale; 0.0 = off (byte-identical).
     penalty_severity_scale: float = 0.0
-    # SUB-MECHANIC B: the bounded penalty draw range (a fraction of prior turnover).
-    # Default (0.0, 0.0) ⇒ the draw, when taken, is identically 0.0.
+    # Bounded penalty draw range (fraction of prior turnover).
     penalty_frac_min: float = 0.0
     penalty_frac_max: float = 0.0
-    # SUB-MECHANIC B: the shortfall half-saturation constant. severity saturates as
-    # shortfall/(shortfall + halfsat) ∈ [0, 1). Must be > 0 (a divisor). Default 1.0.
+    # Half-saturation constant of the penalty severity; > 0.
     penalty_halfsat: float = 1.0
-    # PHASE 5.0: the per-tick ``warehouse_invest`` lever's capacity yield. Once the
-    # seam (B-2) is live, ``capacity_{t+1} = capacity_t + warehouse_invest ·
-    # capacity_per_unit_invest`` (a non-depreciating stock — spend now, stock from
-    # next tick). Default 0.0 ⇒ the carry stays today's (unchanged capacity)
-    # regardless of the decoded ``warehouse_invest`` value — the byte-identity
-    # anchor.
+    # Capacity yield per unit of warehouse_invest (a non-depreciating stock); 0.0 = inert.
     capacity_per_unit_invest: float = 0.0
-    # PHASE 5.0: the per-tick ``warehouse_invest`` lever's money cost. Once the seam
-    # (B-2) is live, ``spend = warehouse_invest · cost_per_unit_invest`` — expensed
-    # opex, not capex. Default 0.0 ⇒ no new opex line regardless of the decoded
-    # ``warehouse_invest`` value — the byte-identity anchor.
+    # Opex cost per unit of warehouse_invest; 0.0 = no cost.
     cost_per_unit_invest: float = 0.0
-    #
     ramp_ticks: int = 0
 
     def __post_init__(self) -> None:
@@ -629,13 +486,13 @@ class WarehouseConfig:
 
     @property
     def penalty_gate_active(self) -> bool:
-        """ """
+        """True when the warehouse shortfall penalty is armed."""
         return self.penalty_severity_scale != 0.0
 
 
 @dataclass(frozen=True)
 class RewardConfig:
-    """ """
+    """Reward shape: pure profit or a weighted blend of profit, revenue, share, and loyalty."""
 
     mode: str = "profit"  # "profit" | "weighted"
     weight_profit: float = 0.5
@@ -655,9 +512,7 @@ class RewardConfig:
             + self.weight_market_share
             + self.weight_loyalty
         )
-        # Only enforce sum-to-1 for the weighted mode: a profit-mode config never
-        # reads the weights, so a caller need not curate them (the default still
-        # sums to 1.0 either way).
+        # Weights must sum to 1 only in weighted mode; profit mode ignores them.
         if self.mode == "weighted" and abs(total - 1.0) > 1e-9:
             raise ValueError(f"weighted reward weights must sum to 1.0, got {total}")
 
@@ -667,7 +522,7 @@ NPC_ARCHETYPES: tuple[str, ...] = ("discounter", "premium", "balanced", "wanderi
 
 @dataclass(frozen=True)
 class SeatSpec:
-    """ """
+    """One arena seat: a learning player, or an NPC of a named archetype."""
 
     is_npc: bool
     archetype: str | None = None
@@ -700,11 +555,7 @@ class CoreConfig:
     assortment: AssortmentConfig = field(default_factory=AssortmentConfig)
     promotion: PromotionConfig = field(default_factory=PromotionConfig)
     expansion: ExpansionConfig = field(default_factory=ExpansionConfig)
-    # Research lever / perception layer (Phase 1.0). The default ResearchConfig +
-    # research lever default 0.0 keep the economics BYTE-IDENTICAL to 0.5 (the opex
-    # term is cost·0 = 0; perception is drawn LAST as draw #4 so it never perturbs the
-    # #1–#3 economic stream). Calibration of the noise/cost/k seeds is delegated to the
-    # sweep (Slice B + the orchestrator).
+    # Research lever; default 0.0 keeps the economics byte-identical (perception is the last RNG draw).
     research: ResearchConfig = field(default_factory=ResearchConfig)
     scm: SCMConfig = field(default_factory=SCMConfig)
     automation: AutomationConfig = field(default_factory=AutomationConfig)
@@ -712,14 +563,12 @@ class CoreConfig:
     wage: WageConfig = field(default_factory=WageConfig)
     supplier: SupplierConfig = field(default_factory=SupplierConfig)
     warehouse: WarehouseConfig = field(default_factory=WarehouseConfig)
-    # Reward shape (Phase 0.5). Default mode="profit" keeps the 0.0–0.4 reward
-    # byte-identical (regression-safe); the scenario/competition config selects
-    # mode="weighted".
+    # Reward shape; default mode="profit" is byte-identical.
     reward: RewardConfig = field(default_factory=RewardConfig)
     seats: tuple[SeatSpec, ...] | None = None
     segments: dict[str, SegmentParams] | None = None
 
     @classmethod
     def default(cls) -> CoreConfig:
-        """The Phase 0.0 default configuration (reward mode="profit", no seat plan)."""
+        """The default configuration (reward mode='profit', no seat plan)."""
         return cls()

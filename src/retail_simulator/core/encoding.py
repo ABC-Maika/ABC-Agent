@@ -156,8 +156,8 @@ def encode_observation(state: WorldState, agent_index: int) -> npt.NDArray[np.fl
     # fallback when no perceived view is seated for this observer.
     first_competitor = competitors[0] if competitors else None
     true_competitor = _true_competitor_view(first_competitor, n_regions)
-    # Phase 1.0: read the observer's SEATED perceived (noised) competitor block; fall
-    # back to the TRUE values when none is seated (a bare WorldState / non-observer).
+    # Read the observer's seated perceived competitor block; fall back to the
+    # true values when none is seated.
     perceived = state.perceived_competitors.get(agent_index, true_competitor)
     competitor_price = perceived.competitor_price
     competitor_market_share = perceived.competitor_market_share
@@ -204,32 +204,18 @@ def encode_observation(state: WorldState, agent_index: int) -> npt.NDArray[np.fl
         "competitor_awareness_region_1": perceived.competitor_awareness_region_1,
         "competitor_loyalty_region_1": perceived.competitor_loyalty_region_1,
         "competitor_market_share_region_1": perceived.competitor_market_share_region_1,
-        # --- Phase 1.0 tail: the agent's OWN current perception fidelity (SELF, EXACT).
-        # Default 0.0 when no fidelity is seated (a bare WorldState / pre-rollout). ---
+        # Own perception fidelity (SELF, exact); 0.0 when none is seated.
         "research_fidelity": state.research_fidelity.get(agent_index, 0.0),
         "competitor_mean_price_region_0": perceived.competitor_mean_price_region_0,
         "competitor_mean_price_region_1": perceived.competitor_mean_price_region_1,
-        # --- Phase 1.1 tail: the agent's OWN seated per-region service_score (SELF,
-        # EXACT — own state is always known; not noised). Falls back to 1.0 (the reset
-        # fixed point) when the per-region array is shorter than n_regions (a
-        # 1-region-fallback state); the offsets are the obs tail at 33/34, never moved. ---
+        # Own seated per-region service_score (SELF, exact); 1.0 when the
+        # per-region array is missing the region.
         "service_score_region_0": _service_score_region(me, 0),
         "service_score_region_1": _service_score_region(me, 1),
-        # --- Phase 1.2 tail (F3 = PERMANENT): the agent's OWN seated automation TIER
-        # (SELF, EXACT — own state, not noised; not subject to perception). A per-
-        # retailer MONOTONE NON-DECREASING integer in ``[0, N_AUTOMATION_TIERS-1]``,
-        # cast to float for the Box dtype contract. The SoT the next-tick demand
-        # reads (PRE-update / lagged) to apply the COGS multiplier via
-        # ``savings_per_tier[automation_tier_prev]``. PURE READ off
-        # ``RetailerState.automation_tier`` (no RNG). Offset 35 — appended at the obs
-        # tail; existing offsets 0–34 NEVER move. ---
+        # Own seated automation tier (SELF, exact; cast to float). Demand reads
+        # it lagged to apply the COGS savings.
         "automation_tier": float(me.automation_tier),
-        # --- Phase 5.0 tail: four SELF fields for the two new Phase-5 levers (own
-        # state, EXACT — not noised). PURE READS off ``RetailerState`` (no RNG). All
-        # four are the existing Phase-4 seats or the NEW B-1 reporting seats — B-1
-        # writes 0.0 to the two reporting seats at reset and never consumes the new
-        # levers, so these read the same values a pre-B-1 world would carry. Offsets
-        # 36–39 — appended at the obs tail; existing offsets 0–35 NEVER move. ---
+        # Own wage/warehouse seats (SELF, exact).
         "employee_happiness": me.employee_happiness,
         "wage_level": me.wage_level,
         "warehouse_utilization": me.last_warehouse_utilization,
@@ -320,13 +306,7 @@ def _region_stockpile(state: WorldState, r: int) -> float:
 
 
 def _service_score_region(me: RetailerState, r: int) -> float:
-    """Read the agent's per-region seated service_score, defaulting to 1.0 (Phase 1.1).
-
-    The per-region array may be shorter than ``n_regions`` (a 1-region-fallback state
-    that pre-dates Phase 1.1's per-region SoT); a missing region reads as 1.0 (the
-    reset/fixed-point value of the score — perfect service, the byte-identity anchor),
-    NOT 0.0 (which would be a stocked-out reputation — the opposite extreme).
-    """
+    """Read the seated per-region service_score; a missing region reads as 1.0 (perfect service), not 0.0 (stocked out)."""
     spr = me.service_score_per_region
     return spr[r] if r < len(spr) else 1.0
 
@@ -346,16 +326,10 @@ def decode_action(
     flat_action: npt.NDArray[np.float32] | list[float] | tuple[float, ...],
     schema: ActionSchema | None = None,
 ) -> StructuredAction:
-    """Decode a flat action into validated structured levers.
+    """Decode a flat action vector (or tuple) into the dict of named lever values.
 
-    Boundary validation lives here (trust internal callers afterwards):
-    continuous levers are clipped to ``[low, high]``; discrete levers are decoded
+    Continuous levers are clipped to ``[low, high]``; discrete levers are decoded
     by argmax over their logits block. Raises ``ValueError`` on wrong length.
-
-    The plain-float tuple form is what ``RetailerState.pending_action`` stores
-    (NFD-1): widening float32 to float64 is lossless and ``np.asarray`` below does it
-    for the array form too, so decoding the tuple is bit-identical to decoding the
-    float32 array the policy returned.
     """
     if schema is None:
         schema = default_action_schema()

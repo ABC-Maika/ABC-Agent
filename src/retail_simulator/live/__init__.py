@@ -1,21 +1,11 @@
-"""This is the project's THIRD transport over the single ``World.step`` seam, sibling
-to ``core/`` (the pure world model), ``envs/`` (the Gymnasium + PettingZoo
-adapters), and ``harness/`` (the training tier). The live wrapper reimplements
-no economics — the seam is called exactly once per tick by the Slice B asyncio
-server, mirroring the ``envs/parallel_env.py`` relationship to ``core/``.
+"""The live transport: a third, sibling view over the single ``World.step`` seam.
 
-Slice A (this package, as shipped now) is SYNC and PURE-PYTHON: the wire
-protocol dataclasses + JSON dispatch + the registry-default action vector +
-the offline replay validator + the client skeleton. Slice B adds the asyncio
-server loop, the action-log writer, the ``websockets`` connection layer, and
-wires :class:`LiveClient` to a real socket.
+Reimplements no economics — the seam is called exactly once per tick by the
+server, mirroring the ``envs/`` relationship to ``core/``.
 
-**Lazy-import contract.** The optional ``websockets`` dependency (the
-``[serve]`` extra per F-DEP=A) is HEAVY and OPTIONAL; it is imported ONLY
-inside Slice B's ``server.py`` / ``client.py`` connection methods at the
-point of first use — NEVER at package-import time. Mirrors the Phase 1.5
-lazy-SB3 contract; verified by a smoke test in the Slice A test suite.
-``import retail_simulator.live`` must remain cheap and stdlib + numpy only.
+Lazy-import contract: the optional ``websockets`` dependency is imported only
+inside ``server.py`` / ``client.py`` at the point of first use, so
+``import retail_simulator.live`` stays cheap (stdlib + numpy only).
 """
 
 from __future__ import annotations
@@ -45,10 +35,8 @@ from retail_simulator.live.replay import replay as run_replay
 from retail_simulator.live.series import SeriesGameResult, SeriesResult, run_series
 from retail_simulator.live.server import ServeConfig, ServeResult, serve_game
 
-# Avoid shadowing the `replay` submodule on attribute access: re-export the
-# function as ``run_replay`` (Slice B M1 cleanup per senior review). The
-# submodule remains reachable via ``import retail_simulator.live.replay`` and
-# ``retail_simulator.live.replay`` attribute access; CLI callers and Slice B's
+# Re-export the replay function as ``run_replay`` so the attribute does not
+# shadow the ``replay`` submodule.
 # wrapper use ``run_replay``.
 
 

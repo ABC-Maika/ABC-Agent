@@ -1,19 +1,9 @@
 """retail-simulator: a deterministic multi-agent RL environment for retail.
 
-Public surface (Gym/PettingZoo-idiomatic; everything under ``core/`` is private):
-
-* :class:`RetailEnv` — the Gymnasium single-agent environment.
-* :class:`RetailParallelEnv` — the PettingZoo Parallel multi-agent environment.
-* :class:`ScenarioConfig` — the operator-facing YAML scenario config (``scenarios``).
-* ``__version__`` — package version.
-
-Importing this package registers the Gymnasium id ``RetailSim-v0`` (so
-``gym.make("RetailSim-v0")`` works without importing ``retail_simulator.envs``
-directly) *when gymnasium is installed*. To keep a bare ``import retail_simulator``
-import-light, the gymnasium/pettingzoo-dependent adapter layer is imported lazily:
-``RetailEnv``/``RetailParallelEnv`` are resolved on first access via module
-``__getattr__``, and registration degrades to a no-op if the optional ``[rl]`` extra
-(gymnasium) is not installed.
+Public surface (Gym/PettingZoo-idiomatic; ``core/`` is private): RetailEnv,
+RetailParallelEnv, ScenarioConfig, ``__version__``. Importing registers the gym id
+``RetailSim-v0`` when gymnasium is installed (the adapter layer itself imports
+lazily, so a bare ``import retail_simulator`` stays numpy-only).
 """
 
 from __future__ import annotations
@@ -30,13 +20,7 @@ if TYPE_CHECKING:  # import only for type-checkers; never at runtime import time
 
 
 def register_environments() -> bool:
-    """Register ``RetailSim-v0`` with Gymnasium if the adapter layer is available.
-
-    Returns ``True`` if registration ran (gymnasium installed), ``False`` if the
-    optional ``[rl]`` extra is absent — in which case a bare ``import
-    retail_simulator`` still succeeds (numpy-only core). Importing
-    ``retail_simulator.envs`` performs the actual registration.
-    """
+    """Register ``RetailSim-v0`` with Gymnasium. Returns False if gymnasium is not installed."""
     try:
         import retail_simulator.envs  # noqa: F401  (import for its registration side effect)
     except ImportError:
@@ -46,12 +30,7 @@ def register_environments() -> bool:
 
 
 def __getattr__(name: str) -> Any:
-    """Lazily expose ``RetailEnv`` without importing gymnasium at module load.
-
-    Keeps ``import retail_simulator`` cheap and dependency-light; the adapter
-    (and thus gymnasium) is only imported when ``retail_simulator.RetailEnv`` is
-    actually accessed.
-    """
+    """Lazily expose RetailEnv / RetailParallelEnv / ScenarioConfig without importing gymnasium at module load."""
     if name == "RetailEnv":
         from retail_simulator.envs import RetailEnv
 

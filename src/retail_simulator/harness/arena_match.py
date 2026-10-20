@@ -1,21 +1,8 @@
 """One unbroken arena match, steppable round by round — the single seating/masking seam.
 
-Three consumers need the SAME match: ``scripts/arena_competition.py`` (the balance study's
-workhorse), ``scripts/gen_leaderboard_artifact.py`` (the precomputed leaderboard) and the
-live demo (``web/demo.py``). The seating rule, the per-seat expansion masking and the
-"log the EFFECTIVE decision" rule are business rules with ONE owner — this module — rather
-than three copies that drift apart the first time any of them is corrected.
+Used by ``scripts/arena_competition.py``, ``scripts/gen_leaderboard_artifact.py`` and the live demo. Seating, per-seat expansion masking, and the "log the EFFECTIVE decision" rule each have ONE owner here, rather than three copies that drift apart.
 
-**Seating.** Seats play in the order they are given. Exactly the ``kind="rl"`` seats are
-listed in ``mask_expansion_seats``, so a trained player's illegal expansion logits are
-driven to ``-inf`` before the world decodes them while an archetype stays unmasked (its
-own illegal picks are part of the posture it was calibrated as). The arena's own
-convention — trained players first, archetypes after — is a CALLER's choice, kept by
-``scripts/arena_competition.py`` and by the demo; nothing here reorders seats.
-
-**The world is continuing.** The env is reset ONCE, in the constructor; ``step()`` plays one
-more tick of the same match. ``episode_start`` is True only for round 1, so a recurrent
-policy's state carries across the whole match rather than being re-initialized per round.
+Seats play in the order given; exactly the ``kind="rl"`` seats are expansion-masked (archetypes stay unmasked — their own illegal picks are part of the posture). The env is reset ONCE in the constructor; ``episode_start`` is True only for round 1, so a recurrent policy's state carries across the whole match.
 """
 
 from __future__ import annotations
@@ -44,9 +31,8 @@ from retail_simulator.harness.arena import (
 from retail_simulator.harness.geo_archetypes import GEO_ARCHETYPE_LABELS, geo_archetypes
 from retail_simulator.harness.ladder import _materialize_predicts
 
-# The levers every consumer records, in the order the study's CSV has always written them.
-# Owned here (the decision-logging rule's single home); ``scripts/arena_competition.py``
-# re-exports it so its own CLI contract is unchanged.
+# The levers every consumer records, in the order the study's CSV writes them;
+# re-exported by scripts/arena_competition.py so its CLI contract is unchanged.
 LOGGED_LEVERS: tuple[str, ...] = (
     "price_index",
     "marketing",
@@ -68,12 +54,7 @@ MIN_SEATS: int = 2
 class ArenaSeatSpec:
     """One seat: who sits there and how they act.
 
-    ``kind="rl"`` seats carry a ``checkpoint`` path and run with expansion masking on;
-    ``kind="npc"`` seats carry an ``archetype`` label from
-    :data:`~retail_simulator.harness.geo_archetypes.GEO_ARCHETYPE_LABELS` and run unmasked.
-    ``name`` is the seat's display name (unique within a match — standings are keyed by it).
-    ``player`` is the demo roster id of a trained player (``"explorer"``) when there is one;
-    it is a LABEL for the wire schema only and never selects behaviour.
+    ``kind="rl"`` seats carry a ``checkpoint`` and run with expansion masking on; ``kind="npc"`` seats carry an ``archetype`` label and run unmasked. ``name`` is unique within a match (standings are keyed by it); ``player`` is a display label only.
     """
 
     name: str
@@ -87,11 +68,7 @@ class ArenaSeatSpec:
 class SeatRound:
     """What one seat did, and got, in one round.
 
-    ``levers`` is the EFFECTIVE decision (post-mask for a masked seat), restricted to
-    :data:`LOGGED_LEVERS`; ``opened_regions`` names the regions whose store count went from
-    zero to non-zero during this round. A retailer may only ever open a region it has no
-    store in (``core/world.py::compute_expansion_mask``), so ``len(opened_regions)`` is also
-    this round's total store growth.
+    ``levers`` is the EFFECTIVE decision (post-mask for a masked seat), restricted to :data:`LOGGED_LEVERS`; ``opened_regions`` are the regions whose store count went 0 -> non-zero this round (a retailer can only open a region it has no store in, so ``len(opened_regions)`` is this round's store growth).
     """
 
     reward: float
@@ -107,11 +84,9 @@ class SeatRound:
 
 @dataclass(frozen=True)
 class RoundResult:
-    """The whole field after one round: ``round`` is 1-based (the round just completed).
+    """The whole field after one round; ``round`` is 1-based (the round just completed).
 
-    ``region_share[r][k]`` is seat ``k``'s ``RetailerState.last_market_share_per_region[r]``
-    and ``region_stores[r][k]`` its ``stores_per_region[r]`` — region-major so a map
-    renderer can read one region's split without transposing the field.
+    ``region_share[r][k]`` / ``region_stores[r][k]`` are region-major so a map renderer can read one region's split without transposing.
     """
 
     round: int
@@ -124,11 +99,9 @@ _SectionT = TypeVar("_SectionT")
 
 
 def _apply(section: _SectionT, overrides: Mapping[str, float]) -> _SectionT:
-    """``dataclasses.replace`` over a RUNTIME-keyed override map, returning the same type.
+    """``dataclasses.replace`` over a runtime-keyed override map, returning the same type.
 
-    The override field names come from CLI flags, so they are not statically known; the
-    cast says exactly that, and keeps it contained to this one line instead of loosening
-    :func:`resolve_arena_world`'s own signature.
+    Override field names come from CLI flags (not statically known); the cast keeps that to one line.
     """
     return cast("_SectionT", replace(cast("Any", section), **overrides))
 
@@ -155,7 +128,7 @@ def resolve_arena_world(
     stockpile_build: float | None = None,
     stockpile_decay: float | None = None,
 ) -> tuple[CoreConfig, str, dict[str, float]]:
-    """ """
+    """Resolve an arena world from knob overrides; return (config, label, the effective overrides)."""
     if overhead is not None:
         config = arena_config(
             overhead_reference_stores=overhead,
@@ -179,10 +152,8 @@ def resolve_arena_world(
         )
         if value is not None
     }
-    # ``restructure_after_ticks``/``restructure_keep_stores`` are genuinely ``int``
-    # (``WageConfig``'s own fields), unlike every other field here (``float``) — the
-    # explicit ``dict[str, float | int]`` annotation covers it, mirroring
-    # ``warehouse_overrides``'s own ``ramp_ticks`` precedent above.
+    # restructure_after_ticks/restructure_keep_stores are genuinely int (WageConfig's own
+    # fields), unlike every other override here (float).
     wage_overrides: dict[str, float | int] = {
         field: value
         for field, value in (
@@ -195,10 +166,7 @@ def resolve_arena_world(
         )
         if value is not None
     }
-    # MECHANIC 5 (regional-share-ceiling): a single-field override dict, mirroring
-    # ``warehouse_overrides``/``wage_overrides`` above (``None`` means "keep the
-    # chosen world's own value" -- omitted from ``overrides`` entirely rather than
-    # recorded at whatever that inherited value is).
+    # Regional-share-ceiling override dict (None keeps the chosen world's own value).
     demand_overrides: dict[str, float] = {
         field: value
         for field, value in (("max_share_per_region", max_share_per_region),)
@@ -249,8 +217,7 @@ def _validate_seats(seats: Sequence[ArenaSeatSpec]) -> None:
     names = [seat.name for seat in seats]
     duplicated = sorted({name for name in names if names.count(name) > 1})
     if duplicated:
-        # Standings and the wire schema are keyed by name, so two seats sharing one
-        # would silently merge.
+        # Seat names key the standings/wire schema, so duplicates would silently merge.
         raise ValueError(f"seat names must be unique, but {duplicated} appear more than once")
     for index, seat in enumerate(seats):
         if seat.kind == "rl":
@@ -269,11 +236,7 @@ def _validate_seats(seats: Sequence[ArenaSeatSpec]) -> None:
 class ArenaMatch:
     """One unbroken arena match over a continuing world, advanced one round per ``step()``.
 
-    Construction seats the field, materializes every policy and resets the world with
-    ``seed``; nothing is lazy afterwards, so the first ``step()`` costs no more than the
-    thousandth. ``homes`` defaults to
-    :func:`~retail_simulator.harness.arena.arena_home_regions` (one distinct METRO home per
-    seat) and must name one region per seat when given.
+    Construction seats the field, materializes every policy and resets the world with ``seed``; nothing is lazy afterwards. ``homes`` defaults to :func:`~retail_simulator.harness.arena.arena_home_regions` (one distinct METRO home per seat).
     """
 
     def __init__(
@@ -308,8 +271,7 @@ class ArenaMatch:
         )
         space = self._env.action_space(self._env.possible_agents[0])
 
-        # Checkpoints load ONCE here (``_materialize_predicts`` owns the lazy SB3 import,
-        # so this module stays importable without stable-baselines3 for an NPC-only field).
+        # Checkpoints load ONCE here (_materialize_predicts owns the lazy SB3 import).
         checkpoints = {seat.name: str(seat.checkpoint) for seat in seat_specs if seat.kind == "rl"}
         predicts = _materialize_predicts(checkpoints, action_space=space, config=config)
         region_table = config.demand.regions
@@ -407,9 +369,7 @@ class ArenaMatch:
     def _effective_levers(self, seat: int, action: npt.NDArray[np.float32]) -> dict[str, float]:
         """Decode the decision the world will actually execute for this seat.
 
-        A masked seat's raw action is mirrored through the env's OWN masking helper, using
-        the mask computed from the PRE-step state — the mask available at decision time.
-        Reading the post-step mask instead would report a successful open as illegal.
+        A masked seat's action is mirrored through the env's OWN masking helper with the PRE-step mask (the mask available at decision time) — the post-step mask would report a successful open as illegal.
         """
         if seat in self._masked:
             action = mask_expansion_logits(

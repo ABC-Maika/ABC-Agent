@@ -1,16 +1,6 @@
-"""Analytical action-space sweep (degeneracy detection) for the Phase 0.3 gate.
+"""Analytical action-space sweep (degeneracy detection).
 
-Cost: ``grid_points^2 + 2*grid_points`` cells (the 2-D grid + the assortment axis
-+ the promotion axis) — far cheaper than ``grid_points^4``.
-
-It runs against the pure :class:`~retail_simulator.core.world.World` seam (NOT an
-RL env): a no-RL, no-learning sweep, fast, exercising exactly the same transition
-the trained agent would. Averaging over several seeds tames the multiplicative
-demand noise (``noise_sigma ~= 0.05``).
-
-Degeneracy verdicts — the 2-D price x marketing surface AND the assortment axis AND
-the promotion axis must each be non-trivially worth setting (the sweep PASS == not
-degenerate on price AND marketing AND assortment AND promotion):
+Runs on the pure World seam (no RL): grid the action space, hold each cell, and score the agent's profit. Legs: the 2-D price x marketing grid, the assortment axis, the promotion axis, and — when enabled — the expansion-timing, research, SCM, automation, and loyalty legs. PASS == non-degenerate on every leg.
 """
 
 from __future__ import annotations
@@ -38,17 +28,12 @@ from retail_simulator.core.state import (
 )
 from retail_simulator.core.world import AGENT_INDEX, World
 
-# Obs index of the PERCEIVED competitor price (Phase 1.0): the reactive research
-# heuristic best-responds to THIS noised read of the varying opponent — a sharper
-# read (higher fidelity) means a less-noisy competitor_price ⇒ a better best-response.
-# Read from the schema below (never hardcoded) so a layout change cannot silently
-# point the heuristic at the wrong slot.
+      # Obs index of the perceived competitor price (read from the schema, never hardcoded): the
+      # reactive research heuristic best-responds to this noised read.
 _COMPETITOR_PRICE_OBS_NAME: str = "competitor_price"
 
-# Default sweep resolution / horizon. A modest grid in each lever keeps the 2-D
-# cell count (grid_points^2) affordable on the seam; ticks_per_point ticks per
-# (cell, seed) average out the demand noise, with a few seeds so the per-point
-# standard error is small relative to the profit curvature.
+      # Default sweep resolution / horizon: a modest grid keeps the 2-D cell count affordable;
+      # ticks_per_point ticks per (cell, seed) average out the demand noise.
 DEFAULT_GRID_POINTS: int = 11
 DEFAULT_TICKS_PER_POINT: int = 1000
 DEFAULT_SEEDS: tuple[int, ...] = (0, 1, 2)
@@ -69,8 +54,8 @@ PINNED_ASSORTMENT: float = 0.5
 
 PINNED_PROMOTION: float = 0.3
 
-# A clear optimum must beat the comparison cell by more than this multiple of the
-# per-point standard error to count as a real (non-noise) win. ~3 sigma.
+      # A clear optimum must beat the comparison cell by more than this multiple of the per-point
+      # standard error to count as a real (non-noise) win. ~3 sigma.
 MARGIN_SIGMA_MULTIPLE: float = 3.0
 
 # Floating-point tolerance for classifying a grid point as a boundary value.
@@ -83,16 +68,13 @@ DEFAULT_EXPANSION_TIMINGS: tuple[int, ...] = (0, 10, 26, 52)
 # Sentinel ``T`` for the never-expand baseline row (a policy that never opens).
 NEVER_EXPAND_T: int = -1
 
-# A timing curve counts as NON-flat (timing matters) only if the best T beats the
-# WORST expand-at-T by > this multiple of their combined std-error — i.e. some
-# T is meaningfully worse than the best T. Reuses the shared sigma multiple.
+      # A timing curve is NON-flat only if the best T beats the WORST expand-at-T by > this multiple
+      # of their combined std-error (reuses the shared sigma multiple).
 TIMING_FLAT_SIGMA_MULTIPLE: float = MARGIN_SIGMA_MULTIPLE
 
-# Research (fidelity) sweep range — the research lever's action bounds. The axis maps
-# a research SPEND in [0, 1] (the lever) through the config's saturating fidelity
-# mapping to a per-tick perception FIDELITY in [0, 1); the verdict reasons about the
-# SPEND axis (the decision variable the agent controls), reporting the resulting
-# fidelity for provenance.
+      # Research (fidelity) sweep range — the research lever's action bounds. The axis maps a
+      # research SPEND in [0, 1] through the config's saturating fidelity mapping; the verdict
+      # reasons about the SPEND axis, reporting the resulting fidelity.
 RESEARCH_LOW: float = 0.0
 RESEARCH_HIGH: float = 1.0
 
@@ -107,10 +89,8 @@ RESEARCH_GATE_BETA_REFERENCE: float = 1.5
 SERVICE_LOW: float = 0.0
 SERVICE_HIGH: float = 1.0
 
-# Default SCM-axis grid: spends in [0, 1] at modest density (the endpoints are
-# load-bearing for the verdict — the constant-baseline best must come from the same
-# grid that contains 0.0 and 1.0 so the "pinned at extreme" classification is well-
-# defined). 11 points matches DEFAULT_GRID_POINTS for symmetry with the other axes.
+      # Default SCM-axis grid: 11 points over [0, 1]; the endpoints are load-bearing (the
+      # 'pinned at extreme' classification requires 0.0 and 1.0 in the grid).
 DEFAULT_SERVICE_LEVELS: tuple[float, ...] = tuple(round(0.1 * i, 2) for i in range(11))
 
 SCM_GATE_COGS_PREMIUM: float = 0.10
@@ -133,10 +113,8 @@ RAMP_POLICY_T: int = -2
 LOYALTY_LOW: float = 0.0
 LOYALTY_HIGH: float = 1.0
 
-# Default loyalty-spend grid: 11 points spanning [0, 1] at modest density (matches
-# DEFAULT_GRID_POINTS / DEFAULT_SERVICE_LEVELS for symmetry). The endpoints are
-# load-bearing for the verdict — the "pinned at extreme" classification requires
-# both 0.0 (the no-program baseline) and 1.0 (the max-spend cell).
+      # Default loyalty-spend grid: 11 points over [0, 1]; the endpoints are load-bearing (the
+      # 'pinned at extreme' classification requires 0.0 and 1.0).
 DEFAULT_LOYALTY_SPENDS: tuple[float, ...] = tuple(round(0.1 * i, 2) for i in range(11))
 
 LOYALTY_GATE_COST_PER_UNIT_SPEND: float = 25.0
@@ -147,14 +125,7 @@ LOYALTY_GATE_BRAND_LOYAL_BETA_PROGRAM: float = 6.0
 class SweepRow2D:
     """One grid cell: a fixed (price, spend_fraction) held for the whole horizon.
 
-    * ``price_index`` — the agent's fixed price for this cell.
-    * ``spend_fraction`` — the agent's fixed marketing spend_fraction for this cell.
-    * ``mean_profit`` — mean per-tick agent profit across post-burn-in ticks and
-      seeds.
-    * ``std_error`` — standard error of that mean (sample std / sqrt(n_samples)),
-      so the verdict can ask whether a win exceeds the noise floor.
-    * ``mean_market_share`` — mean per-tick agent market share (diagnostic).
-    * ``n_samples`` — number of per-tick profit samples behind the mean.
+    ``mean_profit`` is the per-tick profit over post-burn-in ticks and seeds; ``std_error`` is its standard error (so a win must beat the noise floor); ``mean_market_share`` is a diagnostic; ``n_samples`` counts the per-tick samples.
     """
 
     price_index: float
@@ -167,17 +138,7 @@ class SweepRow2D:
 
 @dataclass(frozen=True)
 class SweepRow1D:
-    """One assortment-axis cell: a fixed assortment at the pinned ``(p*, m*)``.
-
-    Carries the pinned price/spend for provenance so the row is self-describing
-    (the assortment axis is meaningful only at the joint optimum it was run at).
-
-    * ``assortment`` — the agent's fixed assortment breadth for this cell.
-    * ``fixed_price`` / ``fixed_spend`` — the joint (price, marketing) optimum the
-      axis was swept at (provenance).
-    * ``mean_profit`` / ``std_error`` / ``mean_market_share`` / ``n_samples`` — as
-      in :class:`SweepRow2D`.
-    """
+    """One assortment-axis cell: a fixed assortment at the pinned ``(p*, m*)`` (carried for provenance). Other fields as in :class:`SweepRow2D`."""
 
     assortment: float
     fixed_price: float
@@ -190,19 +151,7 @@ class SweepRow1D:
 
 @dataclass(frozen=True)
 class SweepRow1DPromotion:
-    """One promotion-axis cell: a fixed promotion at the pinned ``(p*, m*, a*)``.
-
-    Carries the pinned price/spend/assortment for provenance so the row is
-    self-describing (the promotion axis is meaningful only at the optimum it was
-    run at, AND only when measured at steady state — the burn-in discards the
-    transient so the cell reflects the sustained value of the promo level).
-
-    * ``promotion`` — the agent's fixed promotion intensity for this cell.
-    * ``fixed_price`` / ``fixed_spend`` / ``fixed_assortment`` — the (price,
-      marketing, assortment) optimum the axis was swept at (provenance).
-    * ``mean_profit`` / ``std_error`` / ``mean_market_share`` / ``n_samples`` — as
-      in :class:`SweepRow2D`.
-    """
+    """One promotion-axis cell: a fixed promotion at the pinned ``(p*, m*, a*)``, measured at steady state (burn-in discards the transient). Other fields as in :class:`SweepRow2D`."""
 
     promotion: float
     fixed_price: float
@@ -216,7 +165,7 @@ class SweepRow1DPromotion:
 
 @dataclass(frozen=True)
 class ExpansionTimingRow:
-    """ """
+    """One expansion-timing policy: a single open-region-1 tick and its full-trajectory profit."""
 
     open_tick: int
     mean_profit: float
@@ -231,7 +180,7 @@ class ExpansionTimingRow:
 
 @dataclass(frozen=True)
 class ResearchFidelityRow:
-    """ """
+    """One research-spend cell: the spend, the resulting fidelity, and the mean score (profit net of research opex)."""
 
     research_spend: float
     fidelity: float
@@ -243,7 +192,7 @@ class ResearchFidelityRow:
 
 @dataclass(frozen=True)
 class SweepRow1DService:
-    """ """
+    """One SCM service-level cell: a fixed service at the pinned ``(p*, m*, a*, promo*)``."""
 
     service_level: float
     fixed_price: float
@@ -258,7 +207,7 @@ class SweepRow1DService:
 
 @dataclass(frozen=True)
 class SweepRow1DAutomation:
-    """ """
+    """One automation upgrade-timing policy: label, target tier, tick(s), and its full-trajectory profit."""
 
     policy_name: str
     target_tier: int
@@ -280,7 +229,7 @@ class SweepRow1DAutomation:
 
 @dataclass(frozen=True)
 class SweepRow1DLoyalty:
-    """ """
+    """One loyalty-spend cell: a fixed loyalty_spend at the pinned ``(p*, m*, a*, promo*)``."""
 
     loyalty_spend: float
     fixed_price: float
@@ -295,7 +244,7 @@ class SweepRow1DLoyalty:
 
 @dataclass(frozen=True)
 class LoyaltyVsPromotionOrthogonality:
-    """ """
+    """The loyalty-vs-promotion substitution probe: base point, swap cells, and the pass verdict."""
 
     base_loyalty: float
     base_promotion: float
@@ -309,7 +258,7 @@ class LoyaltyVsPromotionOrthogonality:
 
 @dataclass(frozen=True)
 class SweepResult:
-    """ """
+    """All sweep legs in one: grid, axes, optima, and per-leg degeneracy verdicts."""
 
     rows: tuple[SweepRow2D, ...]
     assortment_rows: tuple[SweepRow1D, ...]
@@ -350,7 +299,7 @@ class SweepResult:
 
     @property
     def passed(self) -> bool:
-        """ """
+        """True when no leg is degenerate."""
         return not self.is_degenerate
 
 
@@ -368,11 +317,7 @@ def _beats_profit(
     other_se: float,
     margin_sigma_multiple: float,
 ) -> bool:
-    """True if ``best`` beats ``other`` by > margin_sigma_multiple * combined SE.
-
-    The std-error used is the combined error of the two cells (added in
-    quadrature), so a noisy comparison cell cannot fake (or hide) a real win.
-    """
+    """True if ``best`` beats ``other`` by > margin_sigma_multiple * combined SE (added in quadrature, so a noisy cell cannot fake or hide a win)."""
     combined_se = math.hypot(best_se, other_se)
     margin = best_profit - other_profit
     return margin > margin_sigma_multiple * combined_se
@@ -394,7 +339,7 @@ def verdict_for_sweep(
     spend_high: float = SPEND_HIGH,
     margin_sigma_multiple: float = MARGIN_SIGMA_MULTIPLE,
 ) -> tuple[bool, str, tuple[float, float], float]:
-    """ """
+    """The 2-D degeneracy verdict: (not_degenerate, reason, best_cell, best_value) over the price x marketing grid."""
     if not rows:
         raise ValueError("cannot judge an empty sweep")
 
@@ -513,7 +458,7 @@ def assortment_verdict_for_axis(
     assort_high: float = ASSORT_HIGH,
     margin_sigma_multiple: float = MARGIN_SIGMA_MULTIPLE,
 ) -> tuple[bool, str, float, float]:
-    """ """
+    """The assortment-axis degeneracy verdict: (not_degenerate, reason, best_assortment, best_value)."""
     if not rows:
         raise ValueError("cannot judge an empty assortment axis")
 
@@ -591,7 +536,7 @@ def promotion_verdict_for_axis(
     promo_high: float = PROMO_HIGH,
     margin_sigma_multiple: float = MARGIN_SIGMA_MULTIPLE,
 ) -> tuple[bool, str, float, float]:
-    """ """
+    """The promotion-axis degeneracy verdict: (not_degenerate, reason, best_promotion, best_value)."""
     if not rows:
         raise ValueError("cannot judge an empty promotion axis")
 
@@ -672,7 +617,7 @@ def expansion_verdict_for_timing(
     margin_sigma_multiple: float = MARGIN_SIGMA_MULTIPLE,
     flat_sigma_multiple: float = TIMING_FLAT_SIGMA_MULTIPLE,
 ) -> tuple[bool, str, int, float]:
-    """ """
+    """The expansion-timing degeneracy verdict: (not_degenerate, reason, best_open_tick, best_total)."""
     if not rows:
         raise ValueError("cannot judge an empty expansion-timing leg")
 
@@ -778,7 +723,7 @@ def research_verdict_for_fidelity(
     research_high: float = RESEARCH_HIGH,
     margin_sigma_multiple: float = MARGIN_SIGMA_MULTIPLE,
 ) -> tuple[bool, str, float, float]:
-    """ """
+    """The research-axis degeneracy verdict: (not_degenerate, reason, best_spend, best_value)."""
     if not rows:
         raise ValueError("cannot judge an empty research axis")
 
@@ -821,9 +766,8 @@ def research_verdict_for_fidelity(
         )
 
     # --- Leg (b): the optimal research spend must be INTERIOR (not pinned at max). ---
-    # research=0 best is impossible here (leg (a) requires best to BEAT the research=0
-    # baseline by margin, so best != the baseline cell), so the only degenerate corner
-    # left is "pinned at the max" (free information ⇒ always buy max).
+    # research=0 best is impossible (leg (a) requires beating the baseline), so the only
+    # degenerate corner left is 'pinned at the max' (free information ⇒ always buy max).
     if math.isclose(best.research_spend, research_high, abs_tol=_BOUNDARY_ATOL):
         return (
             True,
@@ -861,7 +805,7 @@ def scm_verdict_for_service(
     service_high: float = SERVICE_HIGH,
     margin_sigma_multiple: float = MARGIN_SIGMA_MULTIPLE,
 ) -> tuple[bool, str, float, float]:
-    """ """
+    """The SCM-axis degeneracy verdict: (not_degenerate, reason, best_service, best_value)."""
     if not rows:
         raise ValueError("cannot judge an empty SCM service-level axis")
 
@@ -882,11 +826,9 @@ def scm_verdict_for_service(
     best_constant_service = best.service_level
     best_constant_profit = best.mean_profit
 
-    # --- Leg (a): best constant must be INTERIOR (not pinned at either extreme). ---
-    # If a single fixed service_level at the boundary dominates, a free PPO learner
-    # converges to that fixed value and does not USE the lever (the 1.0 collapse
-    # antidote). The non-degenerate verdict requires a real tradeoff at the constant
-    # baseline before measuring the variable comparator.
+      # --- Leg (a): best constant must be INTERIOR (not pinned at either extreme). ---
+      # A boundary-dominating constant means a free learner converges to it and never USES the
+      # lever, so the non-degenerate verdict requires a real tradeoff at the constant baseline.
     if math.isclose(best.service_level, service_low, abs_tol=_BOUNDARY_ATOL):
         return (
             True,
@@ -912,14 +854,11 @@ def scm_verdict_for_service(
             best_constant_profit,
         )
 
-    # --- Leg (b): the variable comparator must beat the best constant by margin. ---
-    # The Phase-1.0 lesson, enforced. The free alternative for a PPO learner is the
-    # best constant-service (what a learner that ignores the lever's per-tick
-    # modulation collapses to). For the lever to be non-degenerate, conditioning on
-    # observable own state must EXTRACT value beyond that — operationalized via the
-    # per-region-optimal heuristic (the upper bound on a per-region-conditional
-    # policy). If the variable comparator does NOT beat the best constant by margin,
-    # the per-region asymmetry isn't worth conditioning on => degenerate.
+      # --- Leg (b): the variable comparator must beat the best constant by margin. ---
+      # The free alternative for a learner is the best constant service (what it collapses to when
+      # it ignores per-tick modulation). Conditioning on observable state must EXTRACT value beyond
+      # that — via the per-region-optimal heuristic (the upper bound on a per-region policy);
+      # otherwise the per-region asymmetry isn't worth conditioning on => degenerate.
     if not _beats_profit(
         variable_mean_profit,
         variable_std_error,
@@ -966,7 +905,7 @@ def automation_verdict_for_timing(
     margin_sigma_multiple: float = MARGIN_SIGMA_MULTIPLE,
     flat_sigma_multiple: float = TIMING_FLAT_SIGMA_MULTIPLE,
 ) -> tuple[bool, str, str, float]:
-    """ """
+    """The automation-timing degeneracy verdict: (not_degenerate, reason, best_policy_name, best_total)."""
     if not rows:
         raise ValueError("cannot judge an empty automation upgrade-timing leg")
 
@@ -1014,9 +953,8 @@ def automation_verdict_for_timing(
             best_profit,
         )
 
-    # --- Leg (b): the timing curve must be NON-flat (some interior policy is
-    # meaningfully worse than the best). Plus: ``upgrade_to_2_at_t=0`` must NOT
-    # be a free dominator. ---
+      # --- Leg (b): the timing curve must be NON-flat (some interior policy meaningfully worse
+      # than the best), AND ``upgrade_to_2_at_t=0`` must NOT be a free dominator. ---
     worst = min(upgrade_rows, key=lambda r: r.mean_profit)
     timing_matters = _beats_profit(
         best.mean_profit,
@@ -1025,8 +963,8 @@ def automation_verdict_for_timing(
         worst.std_error,
         flat_sigma_multiple,
     )
-    # Identify the upgrade_to_2_at_t=0 row (if present) so the verdict can detect
-    # the free-lunch failure: t=0 dominates AND the curve is flat.
+      # Identify the upgrade_to_2_at_t=0 row for the free-lunch failure check (t=0 dominates
+      # AND the curve is flat).
     immediate_t2 = next(
         (r for r in upgrade_rows if r.target_tier == 2 and r.upgrade_tick == 0),
         None,
@@ -1084,7 +1022,7 @@ def loyalty_verdict_for_spend(
     loyalty_high: float = LOYALTY_HIGH,
     margin_sigma_multiple: float = MARGIN_SIGMA_MULTIPLE,
 ) -> tuple[bool, str, float, float]:
-    """ """
+    """The loyalty-axis degeneracy verdict: (not_degenerate, reason, best_spend, best_value)."""
     if not rows:
         raise ValueError("cannot judge an empty loyalty-spend axis")
 
@@ -1108,11 +1046,9 @@ def loyalty_verdict_for_spend(
     low_cell = low_cells[0]  # the no-program baseline (the FREE alternative anchor)
     high_cell = high_cells[0]  # the max-spend cell — the "always-spend-max" candidate
 
-    # --- Leg (a): pinned-at-zero -- "no program" dominates ----------------------
-    # If the best constant-loyalty is at the floor (0.0), a free PPO learner converges
-    # to spend=0 and does not USE the lever. Calibration miss — beta_program too low
-    # OR cost_per_unit_spend too high. The lever is degenerate before measuring any
-    # interior margin.
+      # --- Leg (a): pinned-at-zero — 'no program' dominates ---
+      # A floor-pinned best means a free learner converges to spend=0 and never USES the lever
+      # (calibration miss: beta_program too low OR cost_per_unit_spend too high).
     if math.isclose(best.loyalty_spend, loyalty_low, abs_tol=_BOUNDARY_ATOL):
         return (
             True,
@@ -1127,11 +1063,9 @@ def loyalty_verdict_for_spend(
             best_profit,
         )
 
-    # --- Leg (b): loyalty-free -- "always spend max" dominates ------------------
-    # If the best constant is at the max (1.0), the lever has no real tradeoff at
-    # the constant baseline — always-spend-max is a trivial dominant strategy. A
-    # free PPO learner converges to spend=1 and the gate trivially passes without
-    # the lever rewarding any conditioning.
+      # --- Leg (b): loyalty-free — 'always spend max' dominates ---
+      # A max-pinned best means no real tradeoff: always-spend-max is trivially dominant, so the
+      # gate would pass without the lever rewarding any conditioning.
     if math.isclose(best.loyalty_spend, loyalty_high, abs_tol=_BOUNDARY_ATOL):
         return (
             True,
@@ -1147,11 +1081,9 @@ def loyalty_verdict_for_spend(
             best_profit,
         )
 
-    # --- Leg (c): loyalty-inert -- the lever does not move profit by margin ----
-    # The interior best must beat BOTH endpoints by > margin x combined SE. If
-    # neither endpoint is beaten, the spread is within the noise floor and the
-    # lever is degenerate — calibration miss (beta_program too low OR
-    # cost_per_unit_spend too high) ⇒ a free PPO learner finds no gradient.
+      # --- Leg (c): loyalty-inert — the lever does not move profit by margin ---
+      # The interior best must beat BOTH endpoints by > margin x combined SE; otherwise the spread
+      # is within the noise floor (calibration miss) and a free learner finds no gradient.
     beats_low = _beats_profit(
         best.mean_profit,
         best.std_error,
@@ -1167,8 +1099,8 @@ def loyalty_verdict_for_spend(
         margin_sigma_multiple,
     )
     if not (beats_low and beats_high):
-        # Use the LOSER of the two endpoint-vs-best comparisons in the reason so
-        # the operator sees which side the optimum failed to clear.
+        # Use the LOSER of the two endpoint-vs-best comparisons in the reason so the operator
+        # sees which side the optimum failed to clear.
         low_combined = math.hypot(best.std_error, low_cell.std_error)
         high_combined = math.hypot(best.std_error, high_cell.std_error)
         return (
@@ -1213,7 +1145,7 @@ def loyalty_vs_promotion_orthogonality_verdict(
     swap_profits: tuple[tuple[float, float, float, float], ...],
     margin_sigma_multiple: float = MARGIN_SIGMA_MULTIPLE,
 ) -> LoyaltyVsPromotionOrthogonality:
-    """ """
+    """The orthogonality probe verdict: at least one loyalty<->promotion swap must move profit by margin."""
     if not swap_profits:
         return LoyaltyVsPromotionOrthogonality(
             base_loyalty=float(base_loyalty),
@@ -1230,9 +1162,8 @@ def loyalty_vs_promotion_orthogonality_verdict(
             ),
         )
 
-    # The substitution cell that moves profit FURTHEST from the base is the
-    # discriminator — if even the most-different swap doesn't move profit by
-    # margin, every swap is within noise and the levers are degenerate.
+      # The swap that moves profit FURTHEST from the base is the discriminator — if even the
+      # most-different swap is within noise, every swap is within noise.
     best_swap = max(swap_profits, key=lambda s: abs(s[2] - float(base_profit)))
     swap_loyalty, swap_promotion, swap_profit, swap_se = best_swap
     max_delta = abs(swap_profit - float(base_profit))
@@ -1276,14 +1207,14 @@ def _mean_and_std_error(profits: list[float]) -> tuple[float, float, int]:
     """Mean, standard error of the mean, and sample count for a profit list."""
     arr = np.asarray(profits, dtype=np.float64)
     n = arr.size
-    # Sample std (ddof=1) / sqrt(n) is the standard error of the mean; guard the
-    # n == 1 case where the sample std is undefined.
+      # Sample std (ddof=1) / sqrt(n) is the standard error of the mean; guard the n == 1 case
+      # where the sample std is undefined.
     std_error = float(arr.std(ddof=1) / math.sqrt(n)) if n > 1 else 0.0
     return float(arr.mean()), std_error, int(n)
 
 
 def _seat_present_both(state: WorldState) -> None:
-    """ """
+    """Set the agent's presence (and store age) in every region of ``state``."""
     agent = state.retailers[AGENT_INDEX]
     mature_age = agent.store_age_per_region[0] if agent.store_age_per_region else 0
     agent.stores_per_region = tuple(1 for _ in agent.stores_per_region)
@@ -1302,7 +1233,7 @@ def _profit_samples_for_cell(
     seed: int,
     start_present_both: bool = False,
 ) -> tuple[list[float], list[float]]:
-    """ """
+    """Per-tick agent-profit samples for one (price, spend) cell over ``seeds``."""
     world = World(config=config, seed=seed)
     state = world.reset(seed)
     if start_present_both:
@@ -1328,7 +1259,7 @@ def _profit_samples_for_cell(
 
 
 def _default_burn_in_ticks(config: CoreConfig) -> int:
-    """"""
+    """The default burn-in ticks from ``config``."""
     awareness_burn_in = math.ceil(3.0 / config.marketing.decay)
     stockpile_burn_in = math.ceil(3.0 / config.promotion.stockpile_decay)
     return max(awareness_burn_in, stockpile_burn_in)
@@ -1449,7 +1380,7 @@ def _sweep_promotion_axis(
     seeds: tuple[int, ...],
     start_present_both: bool,
 ) -> list[SweepRow1DPromotion]:
-    """ """
+    """Run the 1-D promotion axis at the (price, marketing, assortment) optimum, measured at steady state."""
     promo_grid = np.linspace(PROMO_LOW, PROMO_HIGH, grid_points)
 
     rows: list[SweepRow1DPromotion] = []
@@ -1496,7 +1427,7 @@ def _expansion_action(
     *,
     open_region_1: bool,
 ) -> npt.NDArray[np.float32]:
-    """ """
+    """Build the flat action holding the pinned optima, opening region 1 iff ``open_region_1``."""
     open_logit = 1.0 if open_region_1 else 0.0
     return np.array(
         [
@@ -1533,14 +1464,7 @@ def _expansion_timing_window_total(
 ) -> float:
     """Total agent profit over the scoring window for ONE expansion-timing policy.
 
-    Runs a full trajectory on the :class:`World` seam (no RL): the agent holds the
-    continuous optimum every tick and emits the open-region-1 action ONLY at
-    ``open_tick`` (a never-expand policy passes ``open_tick == NEVER_EXPAND_T``, which
-    never matches a tick index, so it never opens). The seam's cash/presence gate
-    decides whether the open at ``open_tick`` actually fires. The score is the SUM of
-    per-tick agent profit over the window (the full-trajectory total, not a per-tick
-    mean) — that is what makes WHEN to open (paying capex earlier, then carrying the
-    per-store opex longer vs building the loyal-segment moat sooner) a real tradeoff.
+    Runs a full trajectory on the World seam (no RL): the agent holds the continuous optimum every tick and emits the open-region-1 action ONLY at ``open_tick`` (a never-expand policy passes ``open_tick == NEVER_EXPAND_T``, which never matches a tick index, so it never opens); the seam's cash/presence gate decides whether the open at ``open_tick`` actually fires. The score is the SUM of per-tick profit over the window — what makes WHEN to open (pay capex earlier and carry per-store opex longer vs build the moat sooner) a real tradeoff.
     """
     world = World(config=config, seed=seed)
     state = world.reset(seed)
@@ -1570,7 +1494,7 @@ def _sweep_expansion_timing(
     window_ticks: int,
     seeds: tuple[int, ...],
 ) -> list[ExpansionTimingRow]:
-    """ """
+    """Sweep one open tick per policy (never-expand + each expand-at-T) over ``seeds``."""
     rows: list[ExpansionTimingRow] = []
     for open_tick in (NEVER_EXPAND_T, *timings):
         per_seed_totals = [
@@ -1599,12 +1523,7 @@ def _sweep_expansion_timing(
 
 
 def _competitor_price_obs_index(config: CoreConfig) -> int:
-    """The flat-obs index of the perceived ``competitor_price`` field (from the schema).
-
-    Read from ``OBSERVATION_SCHEMA`` (the layout authority) rather than hardcoded, so a
-    future obs-layout change moves the reactive heuristic's read with it. ``config`` is
-    accepted for symmetry with the rest of the sweep (the schema is global today).
-    """
+    """The flat-obs index of the perceived ``competitor_price`` field, read from OBSERVATION_SCHEMA (the layout authority) rather than hardcoded."""
     from retail_simulator.core.schema import OBSERVATION_SCHEMA
 
     for idx, field in enumerate(OBSERVATION_SCHEMA):
@@ -1614,7 +1533,7 @@ def _competitor_price_obs_index(config: CoreConfig) -> int:
 
 
 def research_gate_segments() -> dict[str, SegmentParams]:
-    """ """
+    """The demand segments the research leg runs on."""
     segments = default_segments()
     segments[PRICE_SENSITIVE] = replace(
         segments[PRICE_SENSITIVE], beta_reference=RESEARCH_GATE_BETA_REFERENCE
@@ -1627,7 +1546,7 @@ def research_opponent_config(
     *,
     opponent_archetype: str = RESEARCH_OPPONENT_ARCHETYPE,
 ) -> CoreConfig:
-    """ """
+    """A config whose opponent NPC is the reactive research heuristic (the axis's varying opponent)."""
     region_cfgs = base_config.demand.regions
     n_regions = len(region_cfgs) if region_cfgs else 1
     seat_plan = (
@@ -1646,24 +1565,22 @@ def _research_samples_for_cell(
     burn_in_ticks: int,
     seed: int,
 ) -> tuple[list[float], list[float]]:
-    """ """
+    """Per-tick agent-score samples for one research-spend cell over ``seeds``."""
     world = World(config=config, seed=seed)
     state = world.reset(seed)
     price_low = config.pricing.min_price_index
     price_high = config.pricing.max_price_index
-    # The first read is the reset perceived view (seated to TRUE values at reset). Seed
-    # the heuristic's price from the agent's own initial price slot so tick 0 has a
-    # sensible action before any perceived competitor read exists.
+    # The first read is the reset perceived view (TRUE values); seed the heuristic's price from
+    # the agent's own initial price slot so tick 0 has a sensible action.
     reset_obs, _ = world.agent_observation(state, AGENT_INDEX)
     perceived_competitor_price = float(reset_obs[competitor_price_idx])
 
     profits: list[float] = []
     market_shares: list[float] = []
     for tick in range(ticks):
-        # Best-response: undercut the perceived competitor price a notch, clamped into
-        # the pricing band. If the perceived price reads as the 0.0 absent-competitor
-        # sentinel (should not happen here — the opponent is always seated), fall back to
-        # a mid price. A noisier perceived price ⇒ a worse-aimed undercut.
+        # Best-response: undercut the perceived competitor price a notch, clamped into the pricing
+        # band (mid-price fallback on the 0.0 absent-competitor sentinel). A noisier read ⇒ a
+        # worse-aimed undercut.
         if perceived_competitor_price > price_low:
             target = perceived_competitor_price * 0.97
         else:
@@ -1695,7 +1612,7 @@ def _sweep_research_axis(
     burn_in_ticks: int,
     seeds: tuple[int, ...],
 ) -> list[ResearchFidelityRow]:
-    """ """
+    """Sweep the research-spend grid against the reactive opponent over ``seeds``."""
     opponent_config = research_opponent_config(config)
     competitor_price_idx = _competitor_price_obs_index(opponent_config)
 
@@ -1734,7 +1651,7 @@ def _sweep_research_axis(
 def scm_gate_segments(
     base_segments: dict[str, SegmentParams] | None = None,
 ) -> dict[str, SegmentParams]:
-    """ """
+    """The demand segments the SCM leg runs on."""
     segments = (
         {key: value for key, value in base_segments.items()}
         if base_segments is not None
@@ -1756,7 +1673,7 @@ def scm_gate_config(
     *,
     base_segments: dict[str, SegmentParams] | None = None,
 ) -> CoreConfig:
-    """ """
+    """A config with the SCM (value-of-service) scenario enabled."""
     base = base_config if base_config is not None else CoreConfig.default()
     return replace(
         base,
@@ -1779,7 +1696,7 @@ def _scm_action(
     assortment: float,
     promotion: float,
 ) -> npt.NDArray[np.float32]:
-    """ """
+    """Build the flat action holding the pinned optima with ``service_level`` set."""
     return np.array(
         [
             price,
@@ -1815,7 +1732,7 @@ def _scm_samples_for_cell(
     seed: int,
     start_present_both: bool = False,
 ) -> tuple[list[float], list[float]]:
-    """ """
+    """Per-tick agent-profit samples for one service_level cell over ``seeds``."""
     world = World(config=config, seed=seed)
     state = world.reset(seed)
     if start_present_both:
@@ -1850,7 +1767,7 @@ def _sweep_scm_service_axis(
     seeds: tuple[int, ...],
     start_present_both: bool,
 ) -> list[SweepRow1DService]:
-    """ """
+    """Sweep the service-level grid over ``seeds``."""
     rows: list[SweepRow1DService] = []
     for service_level in service_levels:
         s_f = float(service_level)
@@ -1901,15 +1818,13 @@ def _per_region_optimal_score_for_scm(
     burn_in_ticks: int,
     seeds: tuple[int, ...],
 ) -> tuple[float, float]:
-    """ """
+    """The per-region-optimal oracle: the sum of each region's best constant-service score."""
     region_cfgs = config.demand.regions
     n_regions = len(region_cfgs) if region_cfgs else 1
 
-    # For each region r, run the SCM axis with the agent present in ONLY that region.
-    # The cleanest way to seat "present in region r only" is the SAME mechanism the
-    # continuous chain uses (``_seat_present_both`` flips stores everywhere); here we
-    # flip the agent's per-region presence to a single-region mask after reset. Each
-    # region's best is the per-region oracle; their sum is the variable score.
+    # For each region r, run the SCM axis with the agent present in ONLY that region (flip the
+    # per-region presence to a single-region mask after reset). Each region's best is the
+    # per-region oracle; their sum is the variable score.
     total_mean = 0.0
     summed_variance = 0.0
     for r in range(n_regions):
@@ -1958,20 +1873,9 @@ def _per_region_optimal_score_for_scm(
 
 
 def _seat_present_in_region_only(state: WorldState, region_index: int) -> None:
-    """Seat the agent PRESENT IN ONLY ``region_index`` at reset (per-region heuristic).
+    """Seat the agent PRESENT IN ONLY ``region_index`` at reset.
 
-    For the per-region-optimal heuristic (:func:`_per_region_optimal_score_for_scm`).
-    Flips the agent's ``stores_per_region`` to a one-hot mask at ``region_index`` —
-    the sweep-only regime that isolates per-region SCM economics. The seam reads
-    presence to decide which regions the retailer contributes utility to, so an
-    agent absent from a region pays no opex / earns no demand there.
-
-    Stage 3 (store-ramp-up, section 4.11; senior-review m2, 2026-09-16): mirrors
-    ``_seat_present_both``'s age fix -- seats ``region_index``'s age as MATURE
-    (broadcasting ``store_age_per_region[0]``, still correct here since only
-    PRESENCE changes below, not the ages world.reset already seeded) and every
-    other region's age back to its never-opened default (0), matching their
-    forced-absent presence.
+    For the per-region-optimal heuristic (:func:`_per_region_optimal_score_for_scm`). Flips the agent's ``stores_per_region`` to a one-hot mask at ``region_index`` — an agent absent from a region pays no opex / earns no demand there. Also seats ``region_index``'s age as MATURE and every other region's age at the never-opened default (0), matching their forced-absent presence.
     """
     agent = state.retailers[AGENT_INDEX]
     mature_age = agent.store_age_per_region[0] if agent.store_age_per_region else 0
@@ -1996,12 +1900,7 @@ def _scm_samples_for_cell_region(
     burn_in_ticks: int,
     seed: int,
 ) -> tuple[list[float], list[float]]:
-    """Single-region variant of :func:`_scm_samples_for_cell` for the oracle heuristic.
-
-    Same as :func:`_scm_samples_for_cell` but seats the agent PRESENT IN ONLY
-    ``region_index`` at reset (the per-region single-region world the
-    per-region-optimal oracle runs in).
-    """
+    """Single-region variant of :func:`_scm_samples_for_cell`: the agent is seated present in only ``region_index`` at reset."""
     world = World(config=config, seed=seed)
     state = world.reset(seed)
     _seat_present_in_region_only(state, region_index)
@@ -2023,12 +1922,12 @@ def _scm_samples_for_cell_region(
 
 
 def automation_gate_segments() -> dict[str, SegmentParams]:
-    """ """
+    """The demand segments the automation leg runs on."""
     return default_segments()
 
 
 def automation_gate_config(base_config: CoreConfig | None = None) -> CoreConfig:
-    """ """
+    """A config with the automation scenario enabled."""
     base = base_config if base_config is not None else CoreConfig.default()
     return replace(
         base,
@@ -2047,7 +1946,7 @@ def _automation_action(
     assortment: float,
     promotion: float,
 ) -> npt.NDArray[np.float32]:
-    """ """
+    """Build the flat action holding the pinned optima with the automation target tier set."""
     auto_logits = [0.0, 0.0, 0.0]
     auto_logits[automation_tier] = 1.0
     return np.array(
@@ -2084,12 +1983,7 @@ def _automation_target_for_tick(
 ) -> int:
     """The TARGET tier the agent picks at ``tick`` under the given upgrade-timing policy.
 
-    Under F3 = PERMANENT, the agent's lever is the DECODED TARGET; the seam's gate
-    resolves monotonicity + differential-affordability. To realize a one-shot
-    upgrade-at-T policy, the agent picks target 0 before T and ``target_tier`` from
-    T onward (the same-tier no-op at every later tick is free; the seam never
-    downgrades). For the ramp policy, target 1 at t=0..ramp_tick-1 and target 2
-    from ramp_tick onward.
+    The agent's lever is the DECODED TARGET; the seam's gate resolves monotonicity + differential-affordability. One-shot upgrade-at-T: target 0 before T, ``target_tier`` from T onward (same-tier picks are free no-ops; the seam never downgrades). Ramp: target 1 until ``ramp_tick``, target 2 from there.
     """
     if upgrade_tick == NEVER_UPGRADE_T:
         return 0
@@ -2114,15 +2008,7 @@ def _automation_timing_window_total(
 ) -> float:
     """Total agent profit over the scoring window for ONE automation upgrade-timing policy.
 
-    Runs a full trajectory on the :class:`World` seam (no RL): the agent holds the
-    continuous optimum every tick and emits the TARGET automation tier per
-    :func:`_automation_target_for_tick`. The seam's upgrade gate decides whether
-    each tick's target actually fires (a same-tier pick is a free no-op; an
-    unaffordable differential at the upgrade tick no-ops, itself a finding). The
-    score is the SUM of per-tick agent profit over the window (the full-trajectory
-    total — what makes WHEN to upgrade a real tradeoff: an early upgrade pays the
-    capex sooner but harvests savings for more ticks; a late upgrade waits for
-    cash but loses tail-window savings).
+    Runs a full trajectory on the World seam (no RL): the agent holds the continuous optimum every tick and emits the TARGET automation tier per :func:`_automation_target_for_tick`; the seam's upgrade gate decides whether each tick's target fires (a same-tier pick is a free no-op; an unaffordable differential no-ops, itself a finding). The score is the SUM of per-tick profit over the window — what makes WHEN to upgrade a real tradeoff (early: capex sooner, more savings ticks; late: waits for cash, loses tail savings).
     """
     world = World(config=config, seed=seed)
     state = world.reset(seed)
@@ -2161,19 +2047,18 @@ def _sweep_automation_axis(
     seeds: tuple[int, ...],
     start_present_both: bool,
 ) -> list[SweepRow1DAutomation]:
-    """ """
-    # Pick a ramp_tick from the available timings (skip t=0 — the ramp must split
-    # the upgrade into two separate ticks). Fall back to a small interior value if
-    # all timings collapse to 0.
+    """Sweep the upgrade-timing policies (never, per-T, ramp) over ``seeds``."""
+    # Pick a ramp_tick from the available timings (skip t=0 — the ramp must split the upgrade
+    # into two ticks); fall back to a small interior value if all timings collapse to 0.
     interior_timings = [t for t in timings if t > 0]
     ramp_tick = interior_timings[0] if interior_timings else 5
 
     policy_specs: list[tuple[int, int, int]] = [(0, NEVER_UPGRADE_T, 0)]
-    # upgrade_to_1_at_t=0 — the cheap-immediate upgrade (mostly to confirm the
-    # gate fires; tier 1 dominated by tier 2 in any reasonable calibration).
+    # upgrade_to_1_at_t=0 — the cheap-immediate upgrade (confirms the gate fires; tier 1 is
+    # dominated by tier 2 in any reasonable calibration).
     policy_specs.append((1, 0, 0))
-    # upgrade_to_2_at_t=T for each T in timings (T=0 is the "immediate" free-lunch
-    # check; interior T values are the load-bearing non-degeneracy test).
+    # upgrade_to_2_at_t=T for each T in timings (T=0 is the 'immediate' free-lunch check; interior
+    # T values are the load-bearing non-degeneracy test).
     for t in timings:
         policy_specs.append((2, int(t), 0))
     # ramp_0_to_1_to_2 — gradual path; path-independent total capex.
@@ -2223,7 +2108,7 @@ def _sweep_automation_axis(
 def loyalty_gate_segments(
     *, beta_program_loyal: float = LOYALTY_GATE_BRAND_LOYAL_BETA_PROGRAM
 ) -> dict[str, SegmentParams]:
-    """ """
+    """The demand segments the loyalty leg runs on."""
     segments = default_segments()
     segments[BRAND_LOYAL] = replace(segments[BRAND_LOYAL], beta_program=beta_program_loyal)
     return segments
@@ -2235,7 +2120,7 @@ def loyalty_gate_config(
     beta_program_loyal: float = LOYALTY_GATE_BRAND_LOYAL_BETA_PROGRAM,
     cost_per_unit_spend: float = LOYALTY_GATE_COST_PER_UNIT_SPEND,
 ) -> CoreConfig:
-    """ """
+    """A config with the loyalty-program scenario enabled."""
     base = base_config if base_config is not None else CoreConfig.default()
     return replace(
         base,
@@ -2252,7 +2137,7 @@ def _loyalty_action(
     assortment: float,
     promotion: float,
 ) -> npt.NDArray[np.float32]:
-    """ """
+    """Build the flat action holding the pinned optima with ``loyalty_spend`` set."""
     return np.array(
         [
             price,
@@ -2288,7 +2173,7 @@ def _loyalty_samples_for_cell(
     seed: int,
     start_present_both: bool = False,
 ) -> tuple[list[float], list[float]]:
-    """ """
+    """Per-tick agent-profit samples for one loyalty_spend cell over ``seeds``."""
     world = World(config=config, seed=seed)
     state = world.reset(seed)
     if start_present_both:
@@ -2323,7 +2208,7 @@ def _sweep_loyalty_axis(
     seeds: tuple[int, ...],
     start_present_both: bool,
 ) -> list[SweepRow1DLoyalty]:
-    """ """
+    """Sweep the loyalty-spend grid over ``seeds``."""
     rows: list[SweepRow1DLoyalty] = []
     for loyalty_spend in loyalty_spends:
         l_f = float(loyalty_spend)
@@ -2370,7 +2255,7 @@ def _loyalty_promotion_swap_action(
     spend: float,
     assortment: float,
 ) -> npt.NDArray[np.float32]:
-    """ """
+    """Build the flat action with loyalty/promotion swapped by the delta amounts."""
     return np.array(
         [
             price,
@@ -2407,7 +2292,7 @@ def _sweep_loyalty_orthogonality_probe(
     seeds: tuple[int, ...],
     start_present_both: bool,
 ) -> tuple[float, float, tuple[tuple[float, float, float, float], ...]]:
-    """ """
+    """Run the loyalty<->promotion substitution cells at the joint optima; return (base_profit, best_cell, swap_profits)."""
 
     def _run(loyalty: float, promotion: float) -> tuple[float, float]:
         all_profits: list[float] = []
@@ -2440,8 +2325,8 @@ def _sweep_loyalty_orthogonality_probe(
         d = float(delta)
         if d <= 0.0:
             continue
-        # Two symmetric substitutions per delta: (a) raise loyalty by delta, lower
-        # promotion by delta; (b) raise promotion by delta, lower loyalty by delta.
+        # Two symmetric substitutions per delta: (a) raise loyalty by delta, lower promotion by
+        # delta; (b) the reverse.
         candidates = (
             (
                 min(max(base_loyalty + d, LOYALTY_LOW), LOYALTY_HIGH),
@@ -2467,10 +2352,8 @@ def _sweep_loyalty_orthogonality_probe(
     return float(base_mean), float(base_se), tuple(swap_cells)
 
 
-# The default substitution deltas the orthogonality probe sweeps. A small (0.1)
-# AND a larger (0.3) shift cover both fine and coarse substitutions; the verdict
-# uses the max-delta cell so the bar is "does AT LEAST ONE substitution move
-# profit by margin" (the orthogonal-by-construction reading).
+# Default substitution deltas: a small (0.1) and a larger (0.3) shift; the verdict uses the
+# max-delta cell so the bar is 'at least one substitution moves profit by margin'.
 DEFAULT_LOYALTY_ORTHO_DELTAS: tuple[float, ...] = (0.1, 0.3)
 
 
@@ -2499,7 +2382,7 @@ def run_sweep(
     loyalty_spends: tuple[float, ...] = DEFAULT_LOYALTY_SPENDS,
     loyalty_ortho_deltas: tuple[float, ...] = DEFAULT_LOYALTY_ORTHO_DELTAS,
 ) -> SweepResult:
-    """ """
+    """Run every configured sweep leg and assemble the SweepResult."""
     if config is None:
         config = CoreConfig.default()
     if grid_points < 2:
@@ -2562,8 +2445,8 @@ def run_sweep(
         margin_sigma_multiple=margin_sigma_multiple,
     )
 
-    # --- Pass 3: the 1-D promotion axis at (price*, marketing*, assortment*),
-    # measured at steady state (the burn-in covers awareness AND the stockpile). ---
+    # --- Pass 3: the 1-D promotion axis at (price*, marketing*, assortment*), measured at steady
+    # state (the burn-in covers awareness AND the stockpile). ---
     promotion_rows = _sweep_promotion_axis(
         config,
         fixed_price=best_price,
@@ -2656,9 +2539,9 @@ def run_sweep(
             start_present_both=start_present_both,
         )
         service_tuple = tuple(scm_rows)
-        # The per-region-optimal heuristic — the FREE variable alternative (the
-        # 1.0-lesson antidote). Compares the per-region oracle's score against the
-        # best-of-grid constant-service score inside ``scm_verdict_for_service``.
+          # The per-region-optimal heuristic — the FREE variable alternative; compares the
+          # per-region oracle's score against the best-of-grid constant-service score inside
+          # ``scm_verdict_for_service``.
         service_variable_mean, service_variable_std_error = _per_region_optimal_score_for_scm(
             config,
             fixed_price=best_price,
@@ -2736,11 +2619,10 @@ def run_sweep(
             margin_sigma_multiple=margin_sigma_multiple,
         )
 
-        # F6 orthogonality-vs-promotion diagnostic at the joint optima
-        # (loyalty*, promotion*). Anchor at the loyalty-axis best AND the
-        # promotion-axis best (the chained continuous optimum, already found
-        # above). At least one strict substitution must move profit by > 3σ to
-        # PASS — otherwise the levers are economically indistinguishable.
+          # Orthogonality-vs-promotion diagnostic at the joint optima (loyalty*, promotion*),
+          # anchored at both axis bests (the chained continuous optimum found above): at least one
+          # strict substitution must move profit by > 3 sigma to PASS — otherwise the levers are
+          # economically indistinguishable.
         base_mean, base_se, swap_cells = _sweep_loyalty_orthogonality_probe(
             config,
             base_loyalty=best_loyalty_spend,
@@ -2788,10 +2670,9 @@ def run_sweep(
         assortment_max_value=assortment_max_value,
         assortment_max_cell=best_assortment,
         promotion_max_value=promotion_max_value,
-        # PASS requires non-degenerate on the continuous chain (price AND marketing AND
-        # assortment AND promotion) AND, when run, the expansion-timing leg AND, when
-        # run, the research (value-of-information) leg AND, when run, the SCM leg AND,
-        # when run, the Phase-1.2 automation leg — the SEVEN-leg AND truth table.
+          # PASS requires non-degenerate on the continuous chain (price AND marketing AND
+          # assortment AND promotion) AND, when run, the expansion-timing, research, SCM, and
+          # automation legs.
         is_degenerate=is_degenerate,
         reason=reason_2d,
         assortment_reason=reason_assort,
@@ -2824,7 +2705,7 @@ def run_sweep(
 
 
 def format_sweep_table(result: SweepResult) -> str:
-    """ """
+    """Render the sweep result as a human-readable table."""
     header = f"{'price':>8} {'spend':>8} {'mean_profit':>14} {'std_err':>10} {'mkt_share':>10}"
     sep = "-" * len(header)
     lines = [
@@ -3094,13 +2975,7 @@ def promotion_axis_csv_rows(result: SweepResult) -> list[dict[str, float | int]]
 
 
 def expansion_timing_csv_rows(result: SweepResult) -> list[dict[str, float | int]]:
-    """Return the expansion-timing policies as flat dicts for CSV writing.
-
-    One row per full-trajectory policy: the never-expand baseline
-    (``open_tick == NEVER_EXPAND_T``) plus one per ``expand_at_T``. ``mean_profit``
-    is the mean (across seeds) of the TOTAL profit over the scoring window. Empty
-    when the timing leg was not run (single region / disabled).
-    """
+    """Return the expansion-timing policies as flat dicts for CSV writing (one row per full-trajectory policy; ``mean_profit`` is the seed-mean TOTAL profit over the window; empty when the leg was not run)."""
     return [
         {
             "open_tick": row.open_tick,
@@ -3113,13 +2988,7 @@ def expansion_timing_csv_rows(result: SweepResult) -> list[dict[str, float | int
 
 
 def research_axis_csv_rows(result: SweepResult) -> list[dict[str, float | int]]:
-    """Return the research (value-of-information) axis cells as flat dicts for CSV.
-
-    One row per research-spend cell (the reactive heuristic vs the Balanced NPC), each
-    carrying the spend, the resulting fidelity, the mean score (profit netting research
-    opex), its std-error, the mean market share and the sample count. Empty when the
-    research leg was not run (disabled).
-    """
+    """Return the research (value-of-information) axis cells as flat dicts for CSV writing (one row per spend cell: spend, fidelity, mean score, std-error, share, sample count; empty when the leg was not run)."""
     return [
         {
             "research_spend": row.research_spend,
@@ -3134,15 +3003,7 @@ def research_axis_csv_rows(result: SweepResult) -> list[dict[str, float | int]]:
 
 
 def scm_axis_csv_rows(result: SweepResult) -> list[dict[str, float | int]]:
-    """Return the SCM (value-of-service) axis cells as flat dicts for CSV (Phase 1.1).
-
-    One row per service_level cell (the constant-service sweep against the default
-    Discounter with the SCM scenario ON), each carrying the service_level, the pinned
-    continuous optima, the mean profit (already netted of variable COGS by the per-
-    retailer ``cogs_fraction`` SoT inside ``DemandResult``), its std-error, the mean
-    market share and the sample count. Empty when the SCM leg was not run (disabled or
-    single-region).
-    """
+    """Return the SCM (value-of-service) axis cells as flat dicts for CSV writing (one row per service_level cell; mean profit is net of variable COGS; empty when the leg was not run)."""
     return [
         {
             "service_level": row.service_level,
@@ -3160,16 +3021,7 @@ def scm_axis_csv_rows(result: SweepResult) -> list[dict[str, float | int]]:
 
 
 def automation_axis_csv_rows(result: SweepResult) -> list[dict[str, float | int | str]]:
-    """Return the automation upgrade-timing axis cells as flat dicts for CSV (Phase 1.2).
-
-    One row per upgrade-timing policy (the whole-trajectory comparison against the
-    default Discounter with the automation scenario ON), each carrying the policy
-    label, the target tier, the upgrade tick (sentinels for never_upgrade and the
-    ramp policy), the optional ramp tick, the pinned continuous optima, the mean
-    total profit, its std-error, and the seed count. Mirrors the expansion-timing
-    CSV (F3 = PERMANENT — upgrade is one-shot, expansion template). Empty when the
-    automation leg was not run.
-    """
+    """Return the automation upgrade-timing axis cells as flat dicts for CSV writing (one row per policy: label, target tier, upgrade tick — sentinels for never/ramp — pinned optima, mean total profit; empty when the leg was not run)."""
     return [
         {
             "policy_name": row.policy_name,
@@ -3189,16 +3041,7 @@ def automation_axis_csv_rows(result: SweepResult) -> list[dict[str, float | int 
 
 
 def loyalty_axis_csv_rows(result: SweepResult) -> list[dict[str, float | int]]:
-    """Return the loyalty-program axis cells as flat dicts for CSV (Phase 1.3).
-
-    One row per ``loyalty_spend`` cell (the constant-spend sweep against the
-    default Discounter with the loyalty scenario ON), each carrying the
-    ``loyalty_spend``, the pinned continuous optima, the mean profit (already
-    netted of the new opex line ``cost_per_unit_spend × loyalty_spend`` inside
-    ``apply_accounting``), its std-error, the mean market share and the sample
-    count. Empty when the loyalty leg was not run. Mirrors
-    ``scm_axis_csv_rows``.
-    """
+    """Return the loyalty-program axis cells as flat dicts for CSV writing (one row per loyalty_spend cell; mean profit is net of the loyalty opex line; empty when the leg was not run)."""
     return [
         {
             "loyalty_spend": row.loyalty_spend,

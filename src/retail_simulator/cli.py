@@ -1,21 +1,17 @@
 """``retail-sim`` — the Typer CLI for the retail-simulator.
 
-* ``check-env``         — run ``gymnasium.utils.env_checker.check_env`` -> [OK]/[FAIL]
-* ``train``             — SB3 PPO; write ``runs/<run-id>/{config.json,
-                          metrics.jsonl, metrics.csv, policy.zip, run_summary.txt}``
-* ``sweep``             — analytical pricing sweep; write a report under ``runs/``
-* ``learnability-check``— run the single-agent gate; print the margin + PASS/FAIL
-* ``validate``          — load + validate a scenario YAML (aggregated errors) (0.5)
-* ``calibrate``         — measure each NPC archetype's beat-random margin (0.5)
-* ``competition``       — the multi-agent competition sub-app (run|replay|
-                          register|leaderboard) (0.5)
-* ``version``           — print the package version
+* ``check-env``          — run ``gymnasium.utils.env_checker.check_env`` -> [OK]/[FAIL]
+* ``train``              — SB3 PPO; write ``runs/<run-id>/{config.json, metrics.jsonl,
+                           metrics.csv, policy.zip, run_summary.txt}``
+* ``sweep``              — analytical pricing sweep; write a report under ``runs/``
+* ``learnability-check`` — run the single-agent gate; print the margin + PASS/FAIL
+* ``validate``           — load + validate a scenario YAML (aggregated errors)
+* ``calibrate``          — measure each NPC archetype's beat-random margin
+* ``competition``        — multi-agent competition sub-app (run|replay|register|leaderboard)
+* ``version``            — print the package version
 
-Layer note: the CLI sits in the harness tier (``cli -> harness -> envs -> core``)
-and may import gymnasium/sb3 — always through ``RetailEnv``/``World``/the harness/
-``scenarios``, never reimplementing world/gate/loader logic (the 0.5 commands are a
-THIN surface: ``validate`` routes through ``scenarios.load_scenario``, ``calibrate``
-through ``harness.calibrate``, ``competition`` through ``harness.parallel_gate``).
+Sub-apps: ``league`` (train|evaluate|generalization-diagnostic|ladder),
+``live`` (serve|run-series|replay|play), plus ``play-human`` and ``serve-web``.
 """
 
 from __future__ import annotations
@@ -36,31 +32,24 @@ import typer
 from retail_simulator import __version__
 
 if TYPE_CHECKING:
-    # Type-only import for `_build_serve_config`'s return annotation. The real
-    # import lives inside command bodies so the live wrapper (and its lazy
-    # `websockets` contract) is not paid for at CLI module-import time.
+    # Type-only: the real imports live inside command bodies, keeping heavy deps
+    # (e.g. websockets) out of CLI module-import time.
     from collections.abc import Callable
 
     from retail_simulator.core.config import CoreConfig
     from retail_simulator.harness.ladder import LadderResult
     from retail_simulator.live import SeriesResult, ServeConfig, ServeResult
 
-# `DEFAULT_LEAGUE_NAME` is needed as the default value of the `league train`
-# `--league` Typer option (Typer resolves Option defaults at function-definition
-# time, so the constant must be importable at module load). The league module is
-# lazy w.r.t. SB3/SuperSuit — importing this name does NOT pull the [train] extra.
+# Module-load import: Typer resolves Option defaults at function-definition time.
+# The league module is lazy w.r.t. SB3/SuperSuit (this does not pull [train]).
 from retail_simulator.harness.league import DEFAULT_LEAGUE_NAME
 
-# `LADDER_ARCHETYPE_LABELS` (RLB-8b) is needed to build `league ladder`'s
-# `--participants` help text at module-definition time (same Typer-defaults-
-# resolved-at-def-time constraint as `DEFAULT_LEAGUE_NAME` above), so the name
-# list can never drift from the real allowlist. `harness.ladder`'s own
-# module-level imports are core + spike_archetypes + geo_archetypes only (no
-# envs/SB3) — importing this name is as cheap as the league one above.
+# Module-load import (same def-time constraint as above): feeds `league
+# ladder`'s `--participants` help text from the real allowlist. `harness.ladder`
+# imports no envs/SB3, so this is cheap.
 from retail_simulator.harness.ladder import LADDER_ARCHETYPE_LABELS
 
-# Global state populated by the root callback and read by subcommands. Typer has
-# no first-class "context object" we need beyond these few resolved options.
+# Global state populated by the root callback and read by subcommands.
 _state: dict[str, Any] = {"seed": 42, "quiet": False, "verbose": False, "run_dir": Path("runs")}
 
 app = typer.Typer(
@@ -94,7 +83,7 @@ _log = logging.getLogger("retail_simulator")
 
 
 def _use_color() -> bool:
-    """ """
+    """Whether status prefixes may use ANSI colors (TTY, no --quiet, no NO_COLOR)."""
     if _state["quiet"]:
         return False
     if os.environ.get("NO_COLOR"):
@@ -126,11 +115,10 @@ def _echo(message: str) -> None:
 
 
 def _configure_logging() -> None:
-    """Attach a stderr handler at the resolved level (CLI owns logging setup).
+    """Attach a stderr handler at the resolved level.
 
-    The library adds no handlers on import; here the CLI wires one so INFO/DEBUG
-    progress goes to *stderr* (stdout is reserved for results). ``--quiet`` =>
-    errors only; ``--verbose`` => DEBUG; default => INFO.
+    Progress goes to stderr (stdout is reserved for results). ``--quiet`` => errors
+    only; ``--verbose`` => DEBUG; default => INFO.
     """
     if _state["quiet"]:
         level = logging.ERROR
@@ -179,10 +167,7 @@ def version() -> None:
 
 @app.command("check-env")
 def check_env_command() -> None:
-    """Run the Gymnasium env checker on ``RetailEnv`` -> [OK]/[FAIL], exit 0/1.
-
-    Example: ``retail-sim check-env``
-    """
+    """Run the Gymnasium env checker on ``RetailEnv`` -> [OK]/[FAIL], exit 0/1."""
     import warnings
 
     from gymnasium.utils.env_checker import check_env
@@ -191,11 +176,10 @@ def check_env_command() -> None:
 
     try:
         with warnings.catch_warnings():
-            # The Box-action-space symmetry warning is expected (price box is
-            # [0.5, 2.0] per contract); env_checker must still raise no error.
+            # The Box-action-space symmetry warning is expected; check_env must still pass.
             warnings.simplefilter("ignore")
             check_env(RetailEnv())
-    except Exception as exc:  # noqa: BLE001  (boundary: surface a clean failure, not a traceback)
+    except Exception as exc:  # noqa: BLE001  (clean failure, not a traceback)
         _echo(_status("[FAIL]", f"env_checker reported: {exc}", "red"))
         _echo("This is a bug in RetailEnv, not your agent.")
         raise typer.Exit(code=1) from exc
@@ -213,7 +197,7 @@ def sweep(
     ticks: int = typer.Option(1000, "--ticks", help="Ticks per cell per seed (incl. burn-in)."),
     seeds: int = typer.Option(3, "--seeds", help="Number of seeds to average over."),
 ) -> None:
-    """ """
+    """Run the analytical pricing sweep; write the report + CSVs under ``runs/``."""
     from retail_simulator.harness.sweep import (
         assortment_axis_csv_rows,
         automation_axis_csv_rows,
@@ -254,24 +238,21 @@ def sweep(
     _write_csv(run_dir / "sweep.csv", sweep_csv_rows(result))
     _write_csv(run_dir / "sweep_assortment.csv", assortment_axis_csv_rows(result))
     _write_csv(run_dir / "sweep_promotion.csv", promotion_axis_csv_rows(result))
-    # The expansion-timing leg's CSV (one row per full-trajectory policy). Empty
-    # when the leg was not run (single region / disabled) — _write_csv handles [].
+    # Expansion-timing leg: one row per full-trajectory policy; empty when the leg
+    # was not run — _write_csv handles [].
     _write_csv(run_dir / "sweep_expansion_timing.csv", expansion_timing_csv_rows(result))
-    # Phase 1.0: the research (value-of-information) leg's CSV (one row per research
-    # spend vs the Balanced NPC). Empty when the leg was not run — _write_csv handles [].
+    # Research leg: one row per research spend (vs the Balanced NPC); empty when
+    # not run — _write_csv handles [].
     _write_csv(run_dir / "sweep_research.csv", research_axis_csv_rows(result))
-    # Phase 1.1: the SCM (value-of-service) leg's CSV (one row per service_level vs
-    # the Discounter in the SCM scenario). Empty when the leg was not run / single-
-    # region — _write_csv handles [].
+    # SCM leg: one row per service_level (vs the Discounter in the SCM scenario);
+    # empty when not run / single-region — _write_csv handles [].
     _write_csv(run_dir / "sweep_scm.csv", scm_axis_csv_rows(result))
-    # Phase 1.2: the automation (value-of-automation) leg's CSV (one row per constant
-    # tier vs the Discounter in the automation scenario, each carrying the steady-state
-    # seated automation_tier (the upgrade-timing signal under F3=PERMANENT)). Empty when the leg was not run —
+    # Automation leg: one row per constant tier (vs the Discounter in the automation
+    # scenario, with the steady-state seated automation_tier); empty when not run —
     # _write_csv handles [].
     _write_csv(run_dir / "sweep_automation.csv", automation_axis_csv_rows(result))
-    # Phase 1.3: the loyalty-program leg's CSV (one row per constant loyalty_spend
-    # cell vs the Discounter in the loyalty scenario). Empty when the leg was not
-    # run — _write_csv handles [].
+    # Loyalty leg: one row per constant loyalty_spend (vs the Discounter in the
+    # loyalty scenario); empty when not run — _write_csv handles [].
     _write_csv(run_dir / "sweep_loyalty.csv", loyalty_axis_csv_rows(result))
     _log.info("sweep artifacts written to %s", run_dir)
 
@@ -300,7 +281,7 @@ def learnability_check(
         1, "--n-envs", help="Parallel training envs (SubprocVecEnv) — multiplies throughput."
     ),
 ) -> None:
-    """ """
+    """Run the single-agent learnability gate; print the margin + PASS/FAIL."""
     from retail_simulator.harness.learnability import (
         FULL_TOTAL_STEPS,
         QUICK_TOTAL_STEPS,
@@ -351,15 +332,14 @@ def learnability_check(
 def validate(
     scenario: Path = typer.Argument(..., help="Path to the scenario YAML to validate."),
 ) -> None:
-    """ """
+    """Load + validate a scenario YAML; print its operator-facing summary."""
     from retail_simulator.scenarios import ScenarioConfig
     from retail_simulator.scenarios.loader import ScenarioValidationError, load_scenario
 
     try:
         core_config = load_scenario(scenario)
     except ScenarioValidationError as exc:
-        # Aggregated, numeric per-field message (the loader already formatted it). To
-        # stderr (it is an error/diagnostic, not a result) + a FAIL status line.
+        # Aggregated per-field error (formatted by the loader): to stderr + a FAIL line.
         typer.echo(str(exc), err=True)
         _echo(_status("FAIL", f"scenario {scenario} is invalid", "red"))
         raise typer.Exit(code=1) from exc
@@ -368,9 +348,8 @@ def validate(
         _echo(_status("FAIL", f"scenario file not found: {scenario}", "red"))
         raise typer.Exit(code=1) from exc
 
-    # Re-derive the operator-facing summary from the validated ScenarioConfig (the
-    # same object the loader built). The CoreConfig is the load-bearing artifact; the
-    # ScenarioConfig surface is re-parsed here only to report the operator's fields.
+    # CoreConfig is the load-bearing artifact; the surface is re-parsed only to
+    # report the operator's fields.
     surface = ScenarioConfig.from_yaml(scenario)
     n_regions = len(core_config.demand.regions) if core_config.demand.regions else 1
     _echo(_status("INFO", f"scenario {surface.name!r}", "blue"))
@@ -399,7 +378,7 @@ def calibrate(
     seeds: int = typer.Option(5, "--seeds", help="Seeds averaged per archetype (taming noise)."),
     ticks: int = typer.Option(104, "--ticks", help="Scoring horizon per rollout (~2 years)."),
 ) -> None:
-    """ """
+    """Measure each NPC archetype's beat-random margin over several seeds."""
     from retail_simulator.harness.calibrate import calibrate_all
 
     seed_tuple = tuple(range(_state["seed"], _state["seed"] + seeds))
@@ -422,7 +401,7 @@ def calibrate(
 
 
 def _format_calibration_table(results: dict[str, Any]) -> str:
-    """Render the per-archetype beat-random margins as an ASCII table (DX convention)."""
+    """Render the per-archetype beat-random margins as an ASCII table."""
     header = (
         f"{'archetype':>12} {'metric':>14} {'archetype':>12} "
         f"{'random':>12} {'margin':>10} {'in band':>9}"
@@ -450,7 +429,7 @@ def train(
         False, "--dry-run", help="Print the plan and exit without training."
     ),
 ) -> None:
-    """ """
+    """Train an SB3 PPO policy, then record a deterministic rollout's metrics."""
     import gymnasium as gym
     from stable_baselines3 import PPO
 
@@ -503,7 +482,7 @@ def _rollout_and_record_metrics(
     run_dir: Path,
     max_episode_steps: int,
 ) -> str:
-    """ """
+    """Roll out the trained policy once; write metrics.jsonl + metrics.csv, return a summary."""
     import time
 
     fieldnames = [
@@ -524,9 +503,8 @@ def _rollout_and_record_metrics(
         "expansion_action",
         "research_action",
         "research_fidelity",
-        # Phase 1.1: the SCM action this tick + the recovered per-region stockout
-        # rate + the seated per-region service_score (the 4th seated dynamic, the
-        # per-region liability — pure reads via enrich_agent_info; no RNG).
+        # SCM action this tick + per-region stockout rate + seated per-region
+        # service_score (pure reads, no RNG).
         "service_level_action",
         "stockout_rate_region_0",
         "stockout_rate_region_1",
@@ -536,9 +514,7 @@ def _rollout_and_record_metrics(
         "automation_tier",
         "last_automation_tier_action",
         "automation_capex",
-        # Phase 1.3: the decoded active-loyalty-program intensity this tick (the
-        # action taken; 0.0 at the byte-identity default). NO new seated obs —
-        # the existing per-region loyalty stocks already surface the moat.
+        # Decoded loyalty-program intensity this tick (0.0 at the default).
         "loyalty_spend_action",
         "npc_market_share",
         "seed",
@@ -565,31 +541,24 @@ def _rollout_and_record_metrics(
                 "market_share": float(info.get("market_share", 0.0)),
                 "loyalty": float(info.get("loyalty", 0.0)),
                 "cash": float(info.get("cash", 0.0)),
-                # Phase 0.4: the env's `stores` is now the MULTI-REGION open-store
-                # count (sum across regions), so this column tracks expansion.
+                # Multi-region open-store count (tracks expansion).
                 "stores": int(info.get("stores", 0)),
                 "price_index": float(np.asarray(action).reshape(-1)[0]),
-                # Phase 0.2: the decoded assortment breadth this tick, surfaced by
-                # the env in info (the action taken this tick; 0.0 at reset).
+                # Decoded assortment breadth this tick (0.0 at reset).
                 "assortment": float(info.get("assortment", 0.0)),
-                # Phase 0.3: the decoded promotion intensity this tick (the action
-                # taken this tick; 0.0 at reset) and the seated regional stockpile
-                # debt (read off the next state; surfaces the intertemporal effect).
+                # Decoded promotion intensity this tick (0.0 at reset) + seated
+                # regional stockpile debt.
                 "promotion": float(info.get("promotion", 0.0)),
                 "stockpile": float(info.get("stockpile", 0.0)),
-                # Phase 0.4: the decoded expansion choice this tick (0 = no-op, r =
-                # open region r), surfaced by the env in info (the action taken this
-                # tick; 0.0 at reset) — the multi-region story alongside `stores`.
+                # Decoded expansion choice this tick (0 = no-op, r = open region r;
+                # 0.0 at reset).
                 "expansion_action": float(info.get("expansion_action", 0.0)),
-                # Phase 1.0: the decoded research spend this tick + the seated
-                # per-observer perception fidelity, surfaced by the env in info (the
-                # research metrics for metrics.jsonl; 0.0 at reset).
+                # Decoded research spend this tick + seated perception fidelity
+                # (0.0 at reset).
                 "research_action": float(info.get("research_action", 0.0)),
                 "research_fidelity": float(info.get("research_fidelity", 0.0)),
-                # Phase 1.1: the SCM action this tick + the recovered per-region
-                # stockout rate + the seated per-region service_score (the per-
-                # region liability — pure reads via enrich_agent_info; no RNG;
-                # 1.0/0.0 sentinels at reset).
+                # SCM action this tick + per-region stockout rate + seated
+                # service_score (pure reads, no RNG; 1.0/0.0 sentinels at reset).
                 "service_level_action": float(info.get("service_level_action", 1.0)),
                 "stockout_rate_region_0": float(info.get("stockout_rate_region_0", 0.0)),
                 "stockout_rate_region_1": float(info.get("stockout_rate_region_1", 0.0)),
@@ -659,7 +628,7 @@ def _write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str] | N
 
 
 def _format_gate_summary(report: Any) -> str:
-    """ """
+    """Render the gate report as an ASCII metric table."""
     lines = [
         f"{'metric':>22} {'value':>14}",
         "-" * 38,
@@ -679,8 +648,7 @@ def _format_gate_summary(report: Any) -> str:
         lines.append(f"{'expansion uptake':>22} {uptake.fraction_opening:>14.3f}")
         lines.append(f"{'median open tick':>22} {median_str:>14}")
         if uptake.fraction_opening == 0.0:
-            # A passing gate where PPO never opens region 1 means the lever is
-            # learnable-to-ignore — a CALIBRATION SMELL to surface, not an auto-fail.
+            # Never opening region 1 is a calibration smell, not an auto-fail.
             lines.append(
                 "note: PPO never opened region 1 (uptake 0.0) — expansion is "
                 "learnable-to-ignore; a calibration smell to review (not a gate failure)"
@@ -698,9 +666,8 @@ def play_human(
         help="Local .jsonl file the game record is appended to.",
     ),
 ) -> None:
-    """ """
-    # Lazy: keep the cheap CLI-import path free of the env/pettingzoo stack (mirrors the
-    # other heavy subcommands; the hot-seat driver itself lazily imports the seam).
+    """Play a hot-seat game in the terminal and append a debrief record."""
+    # Lazy import: keeps the env/pettingzoo stack out of CLI module import.
     from retail_simulator.harness.hotseat import (
         append_debrief,
         play_hotseat_game,
@@ -744,38 +711,20 @@ def serve_web(
         ),
     ),
 ) -> None:
-    """Serve the web platform: the built SPA + the FastAPI JSON API as ONE same-origin app.
+    """Serve the built SPA + the FastAPI JSON API as one same-origin app via uvicorn.
 
-    Runs uvicorn over ``retail_simulator.web.app:app`` — the FastAPI transport wrapping the
-    in-memory session core. When a built ``frontend/dist`` exists, the SPA is served at
-    ``/`` (with ``/api`` precedence + a history fallback so a hard refresh on ``/board`` /
-    ``/docs`` boots the app); when it is absent, only the JSON API serves and ``/`` shows a
-    friendly "not built" note. ``uvicorn`` is imported LAZILY inside the command body so the
-    rest of the CLI (and ``import retail_simulator.web``) never pays for the heavy ``[web]``
-    extra unless an operator actually serves.
-
-    BUILD FIRST: ``npm --prefix frontend run build`` (emits ``frontend/dist``), then
-    ``retail-sim serve-web``. ``--dist-dir`` overrides where the SPA is read from.
-
-    SINGLE-PROCESS ONLY: the session manager holds all live games in memory, so the server
-    is pinned to ``workers=1`` (multiple workers would each own a disjoint, unreachable
-    session registry — a started game would be unreachable from a later request landing on
-    another worker). This is a hard product constraint, not a default.
-
-    Example: ``retail-sim serve-web --host 127.0.0.1 --port 8000``
+    Build the SPA first (``npm --prefix frontend run build``). Single-process only:
+    sessions are in-memory, so the server runs with ``workers=1``.
     """
-    # Lazy: uvicorn (the heavy [web] extra) is paid for only when an operator serves.
+    # Lazy import: uvicorn is a heavy extra, paid for only when serving.
     import uvicorn
 
-    # The app is created via the import string (uvicorn owns its lifecycle), so pass the
-    # dist dir to it through the env var the factory reads — keeps the import string clean
-    # and the lazy-import contract intact (no FastAPI imported here).
+    # The dist dir reaches the app factory via env var (uvicorn owns the app lifecycle).
     if dist_dir is not None:
         os.environ["RETAIL_SIM_WEB_DIST"] = str(dist_dir)
 
     _log.info("serving web platform on http://%s:%d (single-process, workers=1)", host, port)
-    # workers=1 is load-bearing — the in-memory SessionManager is per-process (see the
-    # web.app module docstring). The import string lets uvicorn own the app lifecycle.
+    # workers=1 is load-bearing: the in-memory SessionManager is per-process.
     uvicorn.run("retail_simulator.web.app:app", host=host, port=port, workers=1)
 
 
@@ -787,12 +736,10 @@ _PER_AGENT_METRIC_FIELDS: tuple[str, ...] = (
     "cash",
     "stores",
     "expansion_action",
-    # Phase 1.0: the research metrics (the decoded research spend + the seated
-    # perception fidelity), consistent with the per-lever metric fields.
+    # Research: decoded spend + seated perception fidelity.
     "research_action",
     "research_fidelity",
-    # Phase 1.1: per-agent SCM metrics — the decoded service this tick + the
-    # recovered per-region stockout rate + the seated per-region service_score.
+    # SCM: decoded service, per-region stockout rate, seated service_score.
     "service_level_action",
     "stockout_rate_region_0",
     "stockout_rate_region_1",
@@ -809,13 +756,9 @@ _PER_AGENT_METRIC_FIELDS: tuple[str, ...] = (
 def _scenario_seat_plan(scenario: Path | None) -> tuple[int, str]:
     """Resolve ``(n_learning_agents, reward_mode)`` from a scenario YAML (or defaults).
 
-    Routes through ``scenarios.load_scenario`` so the CLI reimplements NO loading. The
-    multi-agent gate (``harness.parallel_gate.run_parallel_gate``) currently parametrizes
-    on ``n_learning_agents`` + ``reward_mode`` only (it builds its own competition
-    ``CoreConfig``), so a ``--scenario`` threads those two derived fields; the full
-    per-region economics of a custom scenario are NOT yet forwarded to the gate (a
-    harness limitation, reported — the CLI does not work around it). Absent a scenario,
-    returns the competition defaults (2 learning agents, weighted reward).
+    Only those two fields are threaded to the gate; the scenario's full per-region
+    economics are not forwarded. Absent a scenario: the competition defaults (2
+    learning agents, weighted reward).
     """
     if scenario is None:
         from retail_simulator.harness.parallel_gate import DEFAULT_N_LEARNING_AGENTS
@@ -884,7 +827,7 @@ def competition_run(
         help="Phase 1.6 (F-LOCUS=A): policy class — 'mlp' (default; vanilla SB3 PPO, preserves every 0–1.5 byte-identity) or 'lstm' (RecurrentPPO with MlpLstmPolicy; requires the [recurrent] extra — sb3-contrib). The lstm path is opt-in; the default 'mlp' threads through to harness.parallel_gate._make_shared_ppo unchanged.",
     ),
 ) -> None:
-    """ """
+    """Run the multi-agent competition gate; write the report + per-agent metrics."""
     from retail_simulator.harness.curriculum import (
         ScenarioDistribution,
         build_curriculum,
@@ -962,15 +905,13 @@ def competition_run(
         policy_kind=policy_kind_literal,
     )
 
-    # Write the gate report (the reused GateReport.to_dict — JSON-serializable).
+    # Write the gate report (GateReport.to_dict is JSON-serializable).
     (run_dir / "gate_report.json").write_text(
         json.dumps(report.to_dict(), indent=2), encoding="utf-8"
     )
 
-    # Per-agent metrics.jsonl: a thin eval rollout of a RANDOM field through the
-    # parallel env (the gate returns only the report, not the trained model — so the
-    # recorded trajectory is the random baseline's, sufficient to honor the per-agent
-    # schema contract; the gate's learned scores live in gate_report.json).
+    # Per-agent metrics.jsonl: a random-field rollout (the gate returns the report
+    # only; learned scores live in gate_report.json).
     _write_competition_metrics(
         run_dir,
         n_learning_agents=n_learning_agents,
@@ -1019,15 +960,7 @@ def competition_replay(
         ..., help="A gate_report.json (or a competition run dir containing one)."
     ),
 ) -> None:
-    """Re-print a saved competition gate report (no training) — exit 0 / 1 on PASS/FAIL.
-
-    Reads a ``gate_report.json`` written by ``competition run`` (a run DIR is also
-    accepted — it resolves ``<dir>/gate_report.json``) and re-prints the headline
-    numbers + PASS/FAIL. Pure I/O: no env, no training, no gate logic. Exits 0 if the
-    saved report PASSED, 1 if it FAILED, so replay is scriptable in CI.
-
-    Example: ``retail-sim competition replay runs/competition-.../gate_report.json``
-    """
+    """Re-print a saved competition gate report (a file or a run dir) — exit 0/1 on PASS/FAIL."""
     report_path = report / "gate_report.json" if report.is_dir() else report
     if not report_path.exists():
         typer.echo(f"gate report not found: {report_path}", err=True)
@@ -1047,7 +980,7 @@ def competition_replay(
 def competition_register(
     policy: Path = typer.Argument(..., help="A trained policy.zip to register as an entrant."),
 ) -> None:
-    """ """
+    """Print that registration (persistent roster) is not available yet."""
     _echo(
         _status(
             "INFO",
@@ -1061,7 +994,7 @@ def competition_register(
 
 @competition_app.command("leaderboard")
 def competition_leaderboard() -> None:
-    """ """
+    """Print that the leaderboard is not available yet."""
     _echo(
         _status(
             "INFO",
@@ -1080,7 +1013,7 @@ def _write_competition_metrics(
     reward_mode: str,
     regional_breakdown: bool,
 ) -> None:
-    """ """
+    """Roll out a random policy through the parallel env; write per-agent metrics.jsonl."""
     from retail_simulator.core.config import CoreConfig, RewardConfig
     from retail_simulator.envs import RetailParallelEnv
 
@@ -1108,29 +1041,23 @@ def _write_competition_metrics(
                 "cash": float(info.get("cash", 0.0)),
                 "stores": int(info.get("stores", 0)),
                 "expansion_action": float(info.get("expansion_action", 0.0)),
-                # Phase 1.0: the per-agent research metrics (decoded spend + seated
-                # fidelity), surfaced by the env in each agent's info.
+                # Research: decoded spend + seated fidelity.
                 "research_action": float(info.get("research_action", 0.0)),
                 "research_fidelity": float(info.get("research_fidelity", 0.0)),
-                # Phase 1.1: per-agent SCM metrics — the decoded service this tick +
-                # the recovered per-region stockout rate + the seated per-region
-                # service_score (pure reads via enrich_agent_info; no RNG).
+                # SCM: decoded service, per-region stockout rate, seated
+                # service_score (pure reads, no RNG).
                 "service_level_action": float(info.get("service_level_action", 1.0)),
                 "stockout_rate_region_0": float(info.get("stockout_rate_region_0", 0.0)),
                 "stockout_rate_region_1": float(info.get("stockout_rate_region_1", 0.0)),
                 "service_score_region_0": float(info.get("service_score_region_0", 1.0)),
                 "service_score_region_1": float(info.get("service_score_region_1", 1.0)),
-                # Phase 1.2 (F3 = PERMANENT): per-agent automation metrics — the
-                # decoded TARGET tier this tick + the SEATED INTEGER tier (the
-                # seam's authority, the SoT for the next-tick demand + the uptake
-                # signal) + the last decoded target (reporting) + the DIFFERENTIAL
-                # cash debited this tick (zero on a no-op upgrade).
+                # Automation: decoded target tier + seated tier (authoritative for
+                # next-tick demand) + last target + tick capex (0 on a no-op).
                 "automation_tier_action": float(info.get("automation_tier_action", 0.0)),
                 "automation_tier": int(info.get("automation_tier", 0)),
                 "last_automation_tier_action": int(info.get("last_automation_tier_action", 0)),
                 "automation_capex": float(info.get("automation_capex", 0.0)),
-                # Phase 1.3: the decoded active-loyalty-program intensity this
-                # tick (the action taken; 0.0 at the byte-identity default).
+                # Decoded loyalty-program intensity this tick (0.0 at the default).
                 "loyalty_spend_action": float(info.get("loyalty_spend_action", 0.0)),
             }
             if regional_breakdown:
@@ -1144,14 +1071,14 @@ def _write_competition_metrics(
 
 
 def _regional_breakdown_for_seat(env: Any, agent_id: str) -> list[int]:
-    """ """
+    """Per-region store counts for the agent's seat."""
     seat = env._seat_of[agent_id]
     retailer = env._state.retailers[seat]
     return [int(n) for n in retailer.stores_per_region]
 
 
 def _format_diversity_report(report: Any) -> str:
-    """"""
+    """Render the soft diversity report as an ASCII table."""
     ratio = "inf" if report.max_min_ratio == float("inf") else f"{report.max_min_ratio:.2f}"
     lines = [
         f"{'diversity (soft)':>22} {'value':>14}",
@@ -1269,7 +1196,7 @@ def league_train(
         help="Phase 1.6 (F-LOCUS=A): policy class for every per-round _make_shared_ppo call — 'mlp' (default; vanilla SB3 PPO, preserves every Slice C byte-identity) or 'lstm' (RecurrentPPO with MlpLstmPolicy; requires the [recurrent] extra — sb3-contrib). The lstm path is opt-in; the default 'mlp' threads through to harness.league.run_league_training unchanged.",
     ),
 ) -> None:
-    """ """
+    """Train rounds of PPO against a growing opponent pool; write the pool + a JSON result."""
     from retail_simulator.harness.curriculum import (
         ScenarioDistribution,
         build_curriculum,
@@ -1285,11 +1212,8 @@ def league_train(
         run_league_training,
     )
 
-    # -- Boundary validation (T-C1-CLI) -------------------------------------------------
-    # Unknown --distribution / bad --pfsp-alpha / non-positive --round-end-eval-episodes
-    # are operator typos; surface them as clean CLI failures (NOT stack traces) before
-    # we do any heavy work (build_league, run_league_training). Mirror the
-    # `competition run --curriculum nonsuch` pattern: [FAIL] line + exit 1.
+    # Validate operator inputs up front (clean [FAIL] + exit 1, no traceback)
+    # before any heavy work.
     if distribution not in ("uniform", "pfsp"):
         _echo(
             _status(
@@ -1327,11 +1251,8 @@ def league_train(
         )
         raise typer.Exit(code=1)
 
-    # -- Reset-pool (T-C1-CLI / N1) ----------------------------------------------------
-    # Clear any prior win-rate matrix + round_*.zip artifacts so a fresh PFSP run
-    # starts from a clean win-rate history without manual cleanup. The manifest
-    # (if present) is left alone — build_league below rebuilds the pool from
-    # scratch against the resolved league_name.
+    # Reset-pool: clear prior win-rate matrix + round_*.zip artifacts (the manifest
+    # is left alone; build_league rebuilds the pool from scratch).
     if reset_pool:
         pool_dir.mkdir(parents=True, exist_ok=True)
         wr_path = pool_dir / "win_rate_matrix.json"
@@ -1341,9 +1262,7 @@ def league_train(
             zip_path.unlink()
         _echo(f"--reset-pool: cleared win_rate_matrix.json + round_*.zip from {pool_dir}")
 
-    # Resolve the named league (build the seeded pool at the operator-supplied dir).
-    # An unknown name raises ValueError listing the known names — surfaced as a clean
-    # CLI failure, never a stack trace (boundary validation, mirrors `competition run`).
+    # Resolve the named league; an unknown name is a clean [FAIL] + exit 1.
     try:
         pool = build_league(league, pool_dir)
     except ValueError as exc:
@@ -1351,7 +1270,7 @@ def league_train(
         _echo(f"Known leagues: {list(known_leagues())}")
         raise typer.Exit(code=1) from exc
 
-    # Resolve the optional curriculum (training-time scenario distribution under F3-A).
+    # Resolve the optional curriculum (training-time scenario distribution).
     selected_curriculum: ScenarioDistribution | None
     if curriculum:
         try:
@@ -1380,32 +1299,23 @@ def league_train(
         pool_dir,
     )
 
-    # Slice C.1 T-C1-CLI — resolve the opponent distribution at the boundary so the
-    # CLI passes a concrete instance into the harness (rather than the Slice B
-    # factory-only path). The factory is still required by the harness signature; we
-    # supply a closure that returns the same instance each round (the harness's
-    # T-C1-RUNLOOP loop wraps it with `_MatrixAwareDistribution` per round, so
-    # cross-round growth is handled inside the harness without the factory needing
-    # to rebuild).
+    # Resolve the opponent distribution once; the factory closure returns the same
+    # instance each round (cross-round growth is handled inside the harness).
     dist_instance: OpponentDistribution
     if distribution == "uniform":
         dist_instance = UniformOpponentDistribution()
     elif distribution == "pfsp":
         dist_instance = PFSPOpponentDistribution(alpha=pfsp_alpha)
     else:
-        # Defensive — the boundary validation above already exited; if a future
-        # refactor adds a new value, this branch surfaces the omission immediately
-        # instead of silently falling through to one of the above.
+        # Defensive: unreachable unless a new distribution value is added.
         _echo(_status("[FAIL]", f"unknown distribution {distribution!r}", "red"))
         raise typer.Exit(code=1)
 
     def _distribution_factory(_pool: FrozenPolicyPool) -> OpponentDistribution:
         return dist_instance
 
-    # T-C1-CLI / N3 — capture the pre-run checkpoint count so the final echo can
-    # report HOW MUCH the pool grew (the operator-visible value the orchestrator's
-    # human-in-the-loop tunes against). Filter to kind=="checkpoint" so the
-    # scripted seed archetypes the pool always carries are not counted.
+    # Pre-run checkpoint count (kind=="checkpoint" only) so the final echo can
+    # report pool growth.
     n_existing_checkpoints = sum(1 for m in pool.members() if m.kind == "checkpoint")
 
     policy_kind_literal = cast(Literal["mlp", "lstm"], policy_kind)
@@ -1422,19 +1332,14 @@ def league_train(
         policy_kind=policy_kind_literal,
     )
 
-    # T-C1-CLI / N3 — operator-visible final-pool-size echo (BEFORE the JSON dump so
-    # it doesn't clutter the JSON payload — the JSON stays clean for downstream
-    # tooling consumers, the human-readable summary goes to stderr-style chatter).
+    # Final pool size, echoed before the JSON so the payload stays clean.
     _echo(
         f"final pool size: {len(result.checkpoints)} checkpoints "
         f"(was {n_existing_checkpoints} before this run)"
     )
 
-    # The new ``win_rate_matrix_snapshot`` field is a WinRateMatrix instance whose
-    # ``_entries`` dict has tuple keys; ``json.dumps`` does NOT support tuple keys
-    # natively, and ``dataclasses.asdict`` preserves that dict as-is. Strip the
-    # snapshot from the printed payload and emit a single line summarizing the
-    # entry count + the on-disk path (the source of truth the operator can grep).
+    # The snapshot has tuple-keyed dicts (not JSON-native); strip it from the
+    # payload and print its entry count + on-disk path.
     printable_result = replace(result, win_rate_matrix_snapshot=None)
     snapshot = result.win_rate_matrix_snapshot
     if snapshot is not None:
@@ -1443,9 +1348,7 @@ def league_train(
             f"{result.pool_dir / 'win_rate_matrix.json'}"
         )
 
-    # `default=str` handles non-JSON-native types (Path on pool_dir, PoolMember inside
-    # checkpoints) without us reaching into the dataclass. The same convention the
-    # 1.5 evaluator + diagnostic commands below use.
+    # default=str handles non-JSON-native types (Paths, PoolMember).
     _echo(json.dumps(asdict(printable_result), indent=2, default=str))
 
 
@@ -1467,7 +1370,7 @@ def league_evaluate(
         help="Base seed for the head-to-head episodes (per-episode seed = base + index).",
     ),
 ) -> None:
-    """ """
+    """Evaluate a trained pool's round-1 vs final-round improvement; print a JSON report."""
     from retail_simulator.harness.arena import arena_lock_config
     from retail_simulator.harness.league import (
         FrozenPolicyPool,
@@ -1475,31 +1378,20 @@ def league_evaluate(
         evaluate_pool_snapshot_improvement,
     )
 
-    # A missing pool is operator error (typo / wrong dir) — surface cleanly and exit 1.
+    # Missing pool is operator error — surface cleanly and exit 1.
     try:
         pool = FrozenPolicyPool.load(pool_dir)
     except FileNotFoundError as exc:
         _echo(_status("[FAIL]", str(exc), "red"))
         raise typer.Exit(code=1) from exc
 
-    # m6 (senior review): an arena-trained pool records its seating on the
-    # manifest (`pool.home_regions`) -- evaluating it on the evaluator's own
-    # default `competition_config()` world would seat these SAME home indices
-    # on a config with far fewer regions (a ValueError from RetailParallelEnv's
-    # own range check) or, worse, silently on the WRONG geometry entirely.
-    # `arena_lock_config()` is the one documented arena config a
-    # home_regions-bearing pool can have trained under (harness.arena's module
-    # docstring: it is the only env `--env arena` ever trains under) --
-    # mirrors `phase4_rl_confirm.py`'s own `_resolve_env` inference.
+    # A home_regions-bearing pool was trained under the arena — evaluate it on
+    # arena_lock_config(), not the default world (wrong geometry).
     home_regions = pool.home_regions
     eval_config = arena_lock_config() if home_regions is not None else None
 
-    # The evaluator consumes ONLY `training_result.checkpoints` for round selection
-    # (it picks round-1 + max-round_index from this tuple). The other fields
-    # (`learning_curves`, `seeds`, `train_steps_per_round`) are provenance the
-    # evaluator does not read; we pass zero-valued placeholders so re-running
-    # `evaluate` against a previously-trained pool does NOT require re-running
-    # `train` to reconstruct the result object.
+    # Only checkpoints are consumed; the other fields are zero-valued placeholders,
+    # so evaluate needs no re-training.
     checkpoints = tuple(
         sorted(
             (m for m in pool.members() if m.kind == "checkpoint"),
@@ -1566,7 +1458,7 @@ def league_generalization(
         help="Seeds the core PCG64 + the SB3 PPO constructors (training reproducibility).",
     ),
 ) -> None:
-    """ """
+    """Compare a curriculum-trained PPO against a fixed-policy baseline on held-out scenarios."""
     from retail_simulator.harness.curriculum import (
         build_curriculum,
         known_curricula,
@@ -1606,22 +1498,15 @@ def league_generalization(
 def _split_participant_label(spec: str) -> tuple[str, str | None]:
     """Split an optional trailing ``:label`` off a participant ``spec``.
 
-    Two grammars (RLB-2's mixed-field ``--participants``):
+    * ``archetype:``/``random:`` specs already carry a colon, so an explicit
+      label is a third segment (``archetype:lean:mylabel``); any other part
+      count or an empty segment (e.g. the typo ``archetype:lean:``) is a
+      ``ValueError``.
+    * Anything else splits on the LAST ``:`` (checkpoint paths never contain
+      one on POSIX); an empty label after a trailing ``:`` is a ``ValueError``.
 
-    * a spec starting with ``archetype:`` or ``random:`` carries its OWN colon
-      already, so a further label must be a THIRD segment:
-      ``"archetype:lean"`` / ``"random:3"`` (no label) or
-      ``"archetype:lean:mylabel"`` / ``"random:3:mylabel"`` (explicit label, the
-      LAST segment) — anything else (wrong part count, or an empty segment, e.g.
-      the trailing-colon typo ``"archetype:lean:"``) is a ``ValueError``.
-    * anything else keeps the pre-RLB-2 rule: split on the LAST ``:`` if present
-      (a checkpoint path never contains one on POSIX), rejecting an empty label
-      after a trailing ``:``.
-
-    Returns ``(raw, explicit_label)`` — ``raw`` is what
-    :func:`~retail_simulator.harness.ladder.parse_participant_spec` should parse;
-    ``explicit_label`` is ``None`` when the caller didn't supply one (the spec's
-    own ``default_label`` applies).
+    Returns ``(raw, explicit_label)``; ``explicit_label`` is ``None`` when the
+    caller supplied none (the spec's own ``default_label`` applies).
     """
     from retail_simulator.harness.ladder import (  # noqa: PLC0415
         ARCHETYPE_SPEC_PREFIX,
@@ -1647,42 +1532,14 @@ def _split_participant_label(spec: str) -> tuple[str, str | None]:
 
 
 def _format_ladder_table(result: "LadderResult") -> str:
-    """Render a :class:`LadderResult` as an ASCII ranking table (presentation-only).
+    """Render a :class:`LadderResult` as a plain-ASCII ranking table (no color).
 
-    Same computed object as the JSON path — an alternate view for an operator
-    scanning a terminal. Three blocks:
-
-    1. The ranking table: rank, label, kind, field_margin, [ci_low, ci_high], plus
-       (RLB-3, battle scoreboard) the field's revenue/market-share/profit
-       component margins (``rev_fm``/``share_fm``/``profit_fm`` — ``"n/a"`` when
-       ``entry.component_field_margins`` is ``None``; share to 4 decimals, money
-       to 1).
-    2. "battle pairs (A over B)": every :class:`PairwiseMargin` — label_a,
-       label_b, the score mean + ``[ci_low, ci_high]``, and the same
-       revenue/share/profit breakdown (``"n/a"`` when ``component_mean_margins``
-       is ``None``).
-    3. A footer: the REPORTED split-half Kendall-τ line, then (RLB-3) the
-       tournament summary — Condorcet winner (or ``none``), the cyclic-triple
-       count over the total, and whether the (first-only, per
-       :attr:`~retail_simulator.harness.ladder.TournamentSummary.decisive_cycle`'s
-       own docstring) realized cycle is decisive, then (RLB-7) the COMPLETE
-       decisive-triple count and its checkpoint-inclusive subset count, plus one
-       ``A > B > C > A`` line per decisive triple (a trailing ``*`` marks a triple
-       containing >= 1 ``"checkpoint"``-kind participant) — the piece that makes
-       the runbook's C3 criterion decidable straight off this table, not just the
-       first-triple-only ``decisive_cycle`` flag.
-
-    (m8) ``loyalty`` is part of :data:`~retail_simulator.harness.league.
-    HEAD_TO_HEAD_COMPONENTS` and is serialized in every ``component_*`` dict, but
-    is deliberately NOT rendered here — the operator-facing table surfaces only
-    revenue/share/profit, the field's three commercial headline numbers.
-
-    (RLB-8a) A ``homes=[...]`` line is printed right after ``env=`` ONLY when
-    ``result.home_regions`` is not ``None`` — a pre-RLB-8a / non-seated ladder's
-    table is completely unaffected (no blank/placeholder line appears).
-
-    The output is plain ASCII — no color codes are emitted — so it is safe to
-    pipe or redirect regardless of the ``NO_COLOR`` environment.
+    Blocks: the ranking rows (field margin + CI, and the revenue/share/profit
+    component margins — ``"n/a"`` when absent), the battle-pair rows, and a
+    footer with the split-half Kendall-τ and the tournament summary (Condorcet
+    winner, cyclic/decisive triples — a trailing ``*`` marks a triple containing
+    a checkpoint). A ``homes=`` line appears only when ``home_regions`` is set;
+    ``loyalty`` is never rendered.
     """
     lines = [
         f"ladder_id={result.ladder_id}",
@@ -1761,16 +1618,15 @@ def _format_ladder_table(result: "LadderResult") -> str:
 
 
 def _ladder_env_default() -> tuple[CoreConfig | None, str]:
-    """The ``default`` ``--env`` value: no config override (``run_ladder`` falls
-    back to its own ``competition_config()`` default — the CLI never imports that
-    builder itself)."""
+    """The ``default`` ``--env`` value: no config override — ``run_ladder`` falls
+    back to its own ``competition_config()`` default."""
     from retail_simulator.harness.ladder import DEFAULT_ENV_LABEL  # noqa: PLC0415
 
     return None, DEFAULT_ENV_LABEL
 
 
 def _ladder_env_calibrated() -> tuple[CoreConfig | None, str]:
-    """The ``calibrated`` ``--env`` value: the Phase-4 ``calibrated_spike_config``."""
+    """The ``calibrated`` ``--env`` value: ``calibrated_spike_config()``."""
     from retail_simulator.harness.ladder import CALIBRATED_ENV_LABEL  # noqa: PLC0415
     from retail_simulator.harness.spike import calibrated_spike_config  # noqa: PLC0415
 
@@ -1778,13 +1634,10 @@ def _ladder_env_calibrated() -> tuple[CoreConfig | None, str]:
 
 
 def _ladder_env_arena() -> tuple[CoreConfig | None, str]:
-    """The ``arena`` ``--env`` value (RLB-8a): the 25-region candidate-lock arena.
+    """The ``arena`` ``--env`` value: the 25-region candidate-lock arena.
 
-    Only the ``(config, config_label)`` pair — this dict's own established
-    shape. The matching ``home_regions=arena_home_regions(2)`` seating is
-    resolved separately in :func:`league_ladder` (a league game is two seats:
-    learner + opponent), NOT folded into this builder's return shape, so every
-    OTHER ``--env`` value stays a plain 2-tuple.
+    Returns only the ``(config, config_label)`` pair; the two-seat arena seating
+    is resolved separately in :func:`league_ladder`.
     """
     from retail_simulator.harness.arena import ARENA_ENV_LABEL, arena_lock_config  # noqa: PLC0415
 
@@ -1792,13 +1645,10 @@ def _ladder_env_arena() -> tuple[CoreConfig | None, str]:
 
 
 def _ladder_env_arena_balanced() -> tuple[CoreConfig | None, str]:
-    """The ``arena-balanced`` ``--env`` value (credit-line-and-rebalance): the
-    re-balanced 25-region arena — the candidate lock plus a working-capital
-    credit line and a smaller warehouse footprint (``harness/arena.py::
-    arena_balanced_config``). Same seating shape as ``arena`` (see
-    :func:`_ladder_env_arena`'s own docstring for why ``home_regions`` is
-    resolved separately in :func:`league_ladder`, not folded in here) — both
-    envs share the SAME 25-region table, only the economics knobs differ.
+    """The ``arena-balanced`` ``--env`` value: the same 25-region arena with a
+    working-capital credit line and a smaller warehouse footprint.
+
+    Seating is resolved separately in :func:`league_ladder`, like ``arena``.
     """
     from retail_simulator.harness.arena import (  # noqa: PLC0415
         ARENA_BALANCED_ENV_LABEL,
@@ -1808,13 +1658,9 @@ def _ladder_env_arena_balanced() -> tuple[CoreConfig | None, str]:
     return arena_balanced_config(), ARENA_BALANCED_ENV_LABEL
 
 
-# `--env`'s SINGLE SOURCE OF TRUTH: name -> zero-arg ``(config, config_label)``
-# builder. Referencing these functions here costs nothing at CLI module-import
-# time (each builder's own heavy/lazy imports run only when INVOKED) — so both
-# `league_ladder`'s `--env` help text and `_resolve_ladder_env`'s [FAIL] allowlist
-# read this dict's keys instead of hand-maintaining a separate name list that could
-# drift from the actual dispatch. "arena" (RLB-8a) is the first env wired in per
-# this comment's own standing instruction: add its builder function + an entry here.
+# `--env` name -> zero-arg ``(config, config_label)`` builder. Single source of
+# truth for the `--env` help text and the unknown-env [FAIL] allowlist (no
+# hand-maintained name list); each builder's heavy imports run only when invoked.
 _LADDER_ENV_BUILDERS: dict[str, Callable[[], tuple[CoreConfig | None, str]]] = {
     "default": _ladder_env_default,
     "calibrated": _ladder_env_calibrated,
@@ -1824,12 +1670,10 @@ _LADDER_ENV_BUILDERS: dict[str, Callable[[], tuple[CoreConfig | None, str]]] = {
 
 
 def _resolve_ladder_env(env: str) -> tuple[CoreConfig | None, str]:
-    """Resolve ``--env``'s short name to a ``(config, config_label)`` pair.
+    """Resolve an ``--env`` name to a ``(config, config_label)`` pair.
 
-    Dispatches through :data:`_LADDER_ENV_BUILDERS`. Raises ``ValueError`` on an
-    unknown ``env`` name (the command's own [FAIL] + exit-1 boundary-validation
-    pattern turns this into a clean CLI failure), listing the SAME allowlist the
-    builders dict defines — never a hand-maintained, driftable copy of it.
+    Dispatches through :data:`_LADDER_ENV_BUILDERS`; an unknown name raises
+    ``ValueError`` listing the same allowlist.
     """
     try:
         builder = _LADDER_ENV_BUILDERS[env]
@@ -1900,7 +1744,7 @@ def league_ladder(
         "ladder_id stays byte-identical.",
     ),
 ) -> None:
-    """ """
+    """Run a head-to-head ladder over the given participants; write ladder.json and print the report."""
     from retail_simulator.harness.arena import arena_home_regions
     from retail_simulator.harness.ladder import parse_participant_spec, run_ladder
 
@@ -1911,18 +1755,13 @@ def league_ladder(
         _echo(_status("[FAIL]", str(exc), "red"))
         raise typer.Exit(code=1) from exc
 
-    # RLB-8a: the arena's seating is resolved HERE, not inside _LADDER_ENV_BUILDERS
-    # (whose shape every other env value shares — see _ladder_env_arena's own
-    # docstring) — a league game is two seats (learner + opponent), matching the
-    # seat count run_ladder's real default path always builds (n_learning_agents=2).
-    # credit-line-and-rebalance: "arena-balanced" shares the exact same 25-region
-    # table (only the economics knobs differ), so it seats identically.
+    # Arena seating: two seats (learner + opponent) on the arena's home regions;
+    # "arena-balanced" shares the same 25-region table, so it seats identically.
     home_regions = arena_home_regions(2) if env in ("arena", "arena-balanced") else None
 
     # -- Boundary validation: --participants ---------------------------------------------
-    # Operator typos (too few participants, a malformed spec, a missing/non-zip
-    # checkpoint path, duplicate labels) are surfaced as clean CLI failures BEFORE
-    # any rollout, mirroring the other `league` commands' [FAIL] + exit-1 pattern.
+    # Surface operator typos (too few, malformed spec, missing/non-zip checkpoint,
+    # duplicate label) as clean [FAIL] + exit 1 before any rollout.
     if len(participants) < 2:
         _echo(
             _status(
@@ -1943,11 +1782,8 @@ def league_ladder(
             _echo(_status("[FAIL]", str(exc), "red"))
             raise typer.Exit(code=1) from exc
         label = explicit_label if explicit_label is not None else participant_spec.default_label
-        # The `.zip` suffix + existence checks are a CHECKPOINT-only concern — an
-        # archetype/random spec has no filesystem footprint to validate. Normalizing
-        # through `Path` (pre-RLB-2 behavior, preserved here) is a checkpoint-only
-        # concern too — an archetype/random spec's source string is passed through
-        # VERBATIM (`Path("archetype:lean")` would just be noise).
+        # `.zip` + existence checks are checkpoint-only — archetype/random specs
+        # have no filesystem footprint and are passed through verbatim.
         source = participant_spec.source
         if participant_spec.kind == "checkpoint":
             path = Path(source)
@@ -1982,8 +1818,7 @@ def league_ladder(
         home_regions=home_regions,
     )
 
-    # Default artifact path derives from the resolved ladder_id (mirrors the other
-    # commands' runs/<id>/ layout); honor the global --run-dir root.
+    # Default artifact path: <run-dir>/<ladder_id>/ladder.json.
     out_path = (
         out if out is not None else Path(_state["run_dir"]) / result.ladder_id / "ladder.json"
     )
@@ -2001,15 +1836,11 @@ def league_ladder(
 
 
 def _resolve_token(no_auth: bool) -> str | None:
-    """Resolve the F2-A shared-secret token from the operator's flags/env.
+    """Resolve the shared-secret token from ``--no-auth`` / ``RETAIL_SIM_TOKEN``.
 
-    The ONE owner of the ``--no-auth`` / ``RETAIL_SIM_TOKEN`` posture, shared by
-    every live-game-touching command (``live serve``, ``live run-series``, and
-    ``live play``): ``--no-auth`` skips the env-var check (local-only
-    convenience and returns ``None``); otherwise ``RETAIL_SIM_TOKEN`` MUST be
-    set or the command exits 1 with a clean operator diagnostic (never a stack
-    trace — boundary validation). Both the server-side config builder and the
-    client command call this so the resolution logic is not duplicated.
+    ``--no-auth`` returns ``None`` (skips the env check); otherwise
+    ``RETAIL_SIM_TOKEN`` must be set or the command exits 1 with a clean
+    diagnostic. Shared by ``live serve``, ``live run-series``, and ``live play``.
     """
     if no_auth:
         return None
@@ -2040,20 +1871,16 @@ def _build_serve_config(
     runs_dir: Path,
     seed: int,
 ) -> "ServeConfig":
-    """Resolve the live-game operator flags into a :class:`ServeConfig`.
+    """Resolve live-game operator flags into a :class:`ServeConfig`.
 
-    The ONE owner of the live-game boundary rules shared by ``live serve`` and
-    ``live run-series`` (DRY): comma-separated ``--npc-archetypes`` parsing +
-    unknown-name rejection (fail fast at the boundary, exit 1 with the known
-    list) and ``--no-auth`` / ``RETAIL_SIM_TOKEN`` resolution (the F2-A
-    shared-secret posture). Raises ``typer.Exit(code=1)`` on operator error —
-    never a stack trace — so both commands surface identical diagnostics.
+    Shared by ``live serve`` and ``live run-series``: parses
+    ``--npc-archetypes`` (unknown names exit 1 with the known list) and resolves
+    the ``--no-auth`` / ``RETAIL_SIM_TOKEN`` token.
     """
     from retail_simulator.core.config import NPC_ARCHETYPES
     from retail_simulator.live import ServeConfig
 
-    # Parse comma-separated archetypes; empty string -> empty tuple (the F3-A
-    # all-remote mode the server's seat plan handles natively).
+    # Empty string -> empty tuple (all-remote mode).
     parsed_archetypes = tuple(name.strip() for name in npc_archetypes.split(",") if name.strip())
     unknown = [a for a in parsed_archetypes if a not in NPC_ARCHETYPES]
     if unknown:
@@ -2061,8 +1888,7 @@ def _build_serve_config(
         _echo(f"Known archetypes: {list(NPC_ARCHETYPES)}")
         raise typer.Exit(code=1)
 
-    # Token resolution: the F2-A shared-secret posture lives in the shared
-    # `_resolve_token` helper (ONE owner — `live play` reuses it verbatim).
+    # Token resolution is shared with `live play` via _resolve_token.
     token = _resolve_token(no_auth)
 
     return ServeConfig(
@@ -2114,21 +1940,10 @@ def live_serve(
     ),
     seed: int = typer.Option(0, "--seed", help="Core PCG64 seed."),
 ) -> None:
-    """Run a single live game over WebSocket — Phase 2.0 demo server.
+    """Run a single live game over WebSocket and print the :class:`ServeResult` as JSON.
 
-    Resolves the operator's flags into a :class:`ServeConfig`, awaits
-    :func:`serve_game` once, prints the resulting :class:`ServeResult` as
-    JSON on stdout, and exits with ``result.exit_status`` (0 on a clean
-    game, 1 on registration timeout, 2 on server error).
-
-    Unknown ``--npc-archetypes`` names fail fast at the boundary with the
-    known list and exit 1 (mirrors ``competition run``'s ``--curriculum``
-    handling). When ``--no-auth`` is NOT set, the shared-secret token is
-    read from the ``RETAIL_SIM_TOKEN`` env var; an unset env var with
-    ``--no-auth`` absent exits 1 with a clean operator diagnostic (never
-    a stack trace — boundary validation).
-
-    Example: ``retail-sim live serve --n-agents 2 --tick-interval 0 --no-auth``
+    Exits with ``result.exit_status`` (0 clean game, 1 registration timeout,
+    2 server error).
     """
     import asyncio
 
@@ -2164,8 +1979,7 @@ def live_serve(
 
     result = asyncio.run(serve_game(config))
 
-    # JSON payload mirrors the league commands — operator-greppable + machine-readable.
-    # ``default=str`` handles the Path on ``run_dir`` without reaching into the dataclass.
+    # ``default=str`` handles the Path on ``run_dir``.
     _echo(json.dumps(asdict(result), indent=2, default=str))
 
     # Honor the server's exit status: 0 clean game, 1 registration timeout, 2 error.
@@ -2176,11 +1990,8 @@ def live_serve(
 def _atomic_write_text(path: Path, text: str) -> None:
     """Write ``text`` to ``path`` atomically via a sibling ``.tmp`` + ``os.replace``.
 
-    Mirrors the live server's own ``_atomic_write_text`` idiom (a crash
-    mid-write leaves either the prior or the new contents, never a partial
-    file) without reaching into ``server.py``'s private helper. The temp file
-    is in the same directory so ``os.replace`` is a same-filesystem rename
-    (atomic on POSIX).
+    The temp file is in the same directory, so the rename is same-filesystem
+    (atomic on POSIX) and a crash never leaves a partial file.
     """
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(text, encoding="utf-8")
@@ -2188,12 +1999,7 @@ def _atomic_write_text(path: Path, text: str) -> None:
 
 
 def _format_series_table(series: "SeriesResult") -> str:
-    """Render a :class:`SeriesResult` as an ASCII table (presentation-only).
-
-    Same computed object as the JSON path — this is just an alternate view
-    for an operator scanning a terminal. Color is suppressed via the same
-    ``_use_color()`` gate the rest of the CLI honors (``NO_COLOR`` etc.).
-    """
+    """Render a :class:`SeriesResult` as a plain-ASCII summary table (presentation-only)."""
     lines = [
         f"series_id={series.series_id}",
         (
@@ -2227,11 +2033,8 @@ def _format_series_table(series: "SeriesResult") -> str:
 async def _wait_for_listener(host: str, port: int, *, timeout_seconds: float = 10.0) -> None:
     """Poll ``host:port`` until a TCP connect succeeds or the timeout elapses.
 
-    A bind-probe readiness check (mirrors the live test suite's
-    ``wait_for_server_ready``): far more robust than a fixed sleep when this runs
-    hands-free on an arbitrary/loaded box, where a fixed delay could let a client
-    race the listener and see ``ConnectionRefusedError``. Raises ``TimeoutError``
-    if the listener never comes up — surfaced by the caller as a failed game.
+    A bind-probe readiness check (robust against a client racing the listener);
+    raises ``TimeoutError`` if the listener never comes up.
     """
     import asyncio
     import contextlib
@@ -2254,24 +2057,12 @@ async def _wait_for_listener(host: str, port: int, *, timeout_seconds: float = 1
 async def _serve_with_clients(config: "ServeConfig", policy: str) -> "ServeResult":
     """Run one game's server AND its ``n_agents`` internal clients concurrently.
 
-    The self-play primitive for ``run-series --self-play`` (Slice 4): a single
-    asyncio event loop hosts :func:`serve_game` plus ``config.n_agents`` internal
-    :func:`play_one_game` clients (one per learning seat), so a game runs
-    hands-free with NO external clients. NPC seats are filled by the server from
-    ``config.npc_archetypes`` as configured; only the learning seats need an
-    internal client. Returns the SERVER's :class:`ServeResult` (the authoritative
-    per-seat scores + exit status that :func:`run_series` aggregates) — the
-    clients' own returned scores are discarded.
-
-    Server-readiness: the server task is created first, then a bounded TCP
-    bind-probe (:func:`_wait_for_listener`) blocks until ``websockets.serve`` is
-    actually accepting before any client connects — robust on slow/loaded boxes
-    (a fixed sleep would risk a client racing the listener). The clients then
-    drive every tick to FinalScores and exit; awaiting the server task yields its
-    ServeResult. Internal-client exceptions are gathered (never masking the
-    authoritative server result) and logged at WARNING so a failed-to-connect
-    internal client is diagnosable rather than surfacing only as an unexplained
-    registration timeout.
+    One asyncio loop hosts :func:`serve_game` plus one :func:`play_one_game`
+    client per learning seat (NPC seats are filled by the server), so a game
+    runs hands-free with no external clients. Clients connect only after
+    :func:`_wait_for_listener` confirms the bind; a failed client is logged at
+    WARNING, never masking the server's :class:`ServeResult` (which is returned;
+    the clients' own scores are discarded).
     """
     import asyncio
     import contextlib
@@ -2279,17 +2070,14 @@ async def _serve_with_clients(config: "ServeConfig", policy: str) -> "ServeResul
     from retail_simulator.live import play_one_game, serve_game
 
     uri = f"ws://{config.host}:{config.port}"
-    # The internal clients use whatever token the server expects — the same
-    # `config.token` (`None` under --no-auth) the shared `_resolve_token` posture
-    # already resolved into the base ServeConfig.
+    # Internal clients use the server's own token (None under --no-auth).
     token = config.token
 
     server_task = asyncio.create_task(serve_game(config))
     client_tasks: list[asyncio.Task[Any]] = []
     try:
-        # Block until the listener is actually bound (not a fixed sleep) before
-        # connecting clients. If the server died during startup, await it below
-        # to surface its ServeResult rather than a bare TimeoutError.
+        # Wait for the bind (not a fixed sleep); on timeout, awaiting server_task
+        # below surfaces its ServeResult rather than a bare TimeoutError.
         with contextlib.suppress(TimeoutError):
             await _wait_for_listener(config.host, config.port)
 
@@ -2298,13 +2086,11 @@ async def _serve_with_clients(config: "ServeConfig", policy: str) -> "ServeResul
             for i in range(config.n_agents)
         ]
 
-        # Await the server last — it returns the authoritative ServeResult once
-        # the game ends.
+        # Await the server last — it holds the authoritative ServeResult.
         result: ServeResult = await server_task
     finally:
-        # Always drain the clients (even if the server task raised) so no client
-        # task is orphaned across the sequential games of a series. return_exceptions
-        # keeps a client teardown error from masking the server result.
+        # Drain the clients even if the server raised, so no task is orphaned;
+        # return_exceptions keeps client errors from masking the server result.
         outcomes = await asyncio.gather(*client_tasks, return_exceptions=True)
         for i, outcome in enumerate(outcomes):
             if isinstance(outcome, BaseException):
@@ -2313,14 +2099,10 @@ async def _serve_with_clients(config: "ServeConfig", policy: str) -> "ServeResul
 
 
 def _make_self_play_serve_fn(policy: str) -> "Callable[[ServeConfig], ServeResult]":
-    """Build the ``serve_fn`` that :func:`run_series` injects under ``--self-play``.
+    """Build the ``serve_fn`` that :func:`run_series` uses under ``--self-play``.
 
-    Each per-game call runs :func:`_serve_with_clients` under its own
-    ``asyncio.run`` (one fresh event loop per game — games stay SEQUENTIAL, the
-    series runs one at a time; the only added concurrency is the per-game
-    server+clients gather). Mirrors the default ``serve_fn``'s
-    ``asyncio.run(serve_game(cfg))`` shape, differing only in that the clients
-    run in-process alongside the server.
+    Each game runs :func:`_serve_with_clients` in its own ``asyncio.run`` —
+    games stay sequential; only the per-game server + clients are concurrent.
     """
     import asyncio
 
@@ -2381,34 +2163,23 @@ def live_run_series(
         "'default' submits the registry-default action every tick.",
     ),
 ) -> None:
-    """Run a SERIES of ``--games`` live games and aggregate per-seat scores.
+    """Run ``--games`` sequential live games and aggregate per-seat scores.
 
-    Reuses every ``live serve`` flag to build the base :class:`ServeConfig`
-    (game ``i`` runs with ``seed + i``; the port is held fixed — games are
-    sequential, not concurrent), then drives :func:`run_series`. Writes a
-    sidecar ``runs/<series-id>/series_summary.json`` (the flat per-game
-    ``runs/<game-id>/`` dirs are UNCHANGED) and prints the
-    :class:`SeriesResult` as JSON on stdout (``--table`` for the ASCII view).
-
-    Exit code: 0 if the series ran to completion — EVEN with some failed
-    games (a failed game is recorded and the series continues); 1 ONLY if
-    ZERO games finished cleanly (``games_played == 0``), with a clear message.
-
-    Example: ``retail-sim live run-series --games 3 --n-agents 2 --no-auth``
+    Game ``i`` runs with ``seed + i`` on the same port. Writes a sidecar
+    ``runs/<series-id>/series_summary.json`` and prints the
+    :class:`SeriesResult` as JSON (``--table`` for the ASCII view). Exits 1
+    only if zero games finished cleanly.
     """
     from retail_simulator.live import run_series
 
-    # Boundary validation: this guard is the single owner of the ``--games``
-    # domain rule, emitting the spec'd exit-1 + a clear operator message
-    # (preferred over Typer's bare ``min=`` usage error, which exits 2 with no
-    # domain context).
+    # Clean [FAIL] + exit 1 for --games < 1 (Typer's bare min= would exit 2
+    # with no context).
     if games < 1:
         _echo(_status("[FAIL]", f"--games must be >= 1 (got {games})", "red"))
         raise typer.Exit(code=1)
 
-    # The internal-client policy is only consulted under --self-play; validate
-    # it up front either way so the diagnostic is the same shape as `live play`
-    # and a bad value never reaches the serve_fn.
+    # Validate the --self-play policy up front so a bad value never reaches the
+    # serve_fn.
     if self_play and policy != "default":
         _echo(
             _status(
@@ -2448,18 +2219,14 @@ def live_run_series(
         seed,
     )
 
-    # Without --self-play the series uses run_series's default serve_fn (waits
-    # for external clients — behavior UNCHANGED). With --self-play, each game is
-    # served alongside its own in-process clients via the injected serve_fn;
-    # run_series's aggregation core is identical in both paths (self-play is
-    # PURELY a serve_fn swap — no change to the reducer).
+    # Self-play only swaps the serve_fn (in-process clients); aggregation is
+    # identical to the external-client path.
     if self_play:
         series = run_series(base_config, games=games, serve_fn=_make_self_play_serve_fn(policy))
     else:
         series = run_series(base_config, games=games)
 
-    # Sidecar lives under the SAME runs_dir as the per-game dirs, namespaced by
-    # series id so a series never collides with a flat per-game dir.
+    # Sidecar under <runs-dir>/<series-id>, so it never collides with per-game dirs.
     series_dir = runs_dir / series.series_id
     series_dir.mkdir(parents=True, exist_ok=True)
     summary = {
@@ -2485,13 +2252,11 @@ def live_run_series(
     if table:
         _echo(_format_series_table(series))
     else:
-        # ``default=str`` handles the Path on each game's ``run_dir`` (none here,
-        # but matches `live serve`'s echo for consistency).
+        # ``default=str`` matches `live serve`'s echo.
         _echo(json.dumps(asdict(series), indent=2, default=str))
 
-    # The series is a SUCCESS as long as at least one game finished cleanly —
-    # individual failed games are recorded and listed, never fatal. A zero-clean
-    # series is the only exit-1 case (nothing aggregable; likely misconfiguration).
+    # Failed games are recorded, never fatal; exit 1 only when zero games
+    # finished cleanly.
     if series.games_played == 0:
         _echo(
             _status(
@@ -2518,17 +2283,11 @@ def live_replay(
         "truncation for crashed-server replays.",
     ),
 ) -> None:
-    """Replay a recorded game offline; verify AC-4 bit-identity — exit 0 / 1.
+    """Replay a recorded game offline and verify bit-identity; exit 0/1.
 
-    Calls :func:`replay_game_dir` on the per-game directory and prints the
-    resulting :class:`ReplayResult` as JSON. Exits 0 on a clean (bit-identical)
-    replay; 1 on a divergence or (under ``--strict``) a truncated action log.
-
-    A missing ``--game-dir`` (or missing manifest / action_log under it) surfaces
-    as a clean operator diagnostic via :class:`FileNotFoundError` from
-    :func:`replay_game_dir` — exit 1, no stack trace.
-
-    Example: ``retail-sim live replay --game-dir runs/game-abc123``
+    Prints the :class:`ReplayResult` as JSON. Exits 1 on a divergence or (under
+    ``--strict``) a truncated action log; a missing game dir/manifest surfaces
+    as a clean ``[FAIL]``.
     """
     from retail_simulator.live import replay_game_dir
 
@@ -2567,23 +2326,10 @@ def live_play(
 ) -> None:
     """Connect ONE client to a running live game, play it, print final scores.
 
-    Constructs a :class:`LiveClient`, connects (printing the human-readable seat
-    assignment), then submits one action per observed tick until the server
-    sends FinalScores, which are printed as JSON on stdout. The client is the
-    PRIMITIVE — to fill a 2-seat game an operator launches two ``play`` clients
-    (or one + an NPC seat); this command does NOT orchestrate multiple clients.
-
-    Exit 0 when the game ends cleanly (FinalScores received). Exit 1 on a
-    :class:`ConnectionError` (server unreachable, connection rejected, or game
-    aborted) with a clear ``[FAIL]`` message — never a stack trace.
-
-    The ``default`` policy submits a writable copy of the read-only
-    ``REGISTRY_DEFAULT_ACTION`` each tick (the passive baseline; the env outcome
-    is still seed-dependent, so across a seed-varying ``run-series`` it yields
-    cross-seed variance data). ``--policy random`` is intentionally NOT shipped
-    in this slice — it is deferred until a stochastic baseline is needed.
-
-    Example: ``retail-sim live play --host localhost --port 8765 --no-auth``
+    Submits one action per tick until FinalScores (printed as JSON); the seat
+    assignment is printed when assigned. A single-client primitive — launch two
+    clients (or one + an NPC seat) to fill a 2-seat game. Exits 0 on a clean
+    end; 1 on ``ConnectionError`` or a game that ends without final scores.
     """
     import asyncio
 
@@ -2602,9 +2348,8 @@ def live_play(
     token = _resolve_token(no_auth)
     uri = f"ws://{host}:{port}"
 
-    # `seed` is accepted now so the flag surface is stable when a stochastic
-    # policy is added, but it does not affect the passive default policy
-    # `play_one_game` submits (a writable copy of REGISTRY_DEFAULT_ACTION).
+    # `seed` is reserved for future stochastic policies; the default policy
+    # ignores it.
 
     _log.info(
         "running live play: uri=%s, agent_name=%s, policy=%s, auth=%s",
@@ -2614,10 +2359,8 @@ def live_play(
         "off" if token is None else "on",
     )
 
-    # Print the human-readable seat assignment at the original timing — right
-    # after the server assigns the seat, before the first action — via the
-    # play-loop's `on_seat_assigned` seam (the loop itself has ONE owner now:
-    # `play_one_game`).
+    # Print the seat assignment as soon as the server assigns it, before the
+    # first action.
     def _print_seat(seat: SeatAssigned) -> None:
         _echo(
             _status(
@@ -2635,9 +2378,8 @@ def live_play(
         _echo(_status("[FAIL]", str(exc), "red"))
         raise typer.Exit(code=1) from exc
 
-    # `play_one_game` returns None when the socket closed without an end-of-game
-    # frame (a fatal error would have raised ConnectionError) — treat it as an
-    # aborted game, mirroring the prior inline behavior.
+    # None means the socket closed without an end-of-game frame — treat as an
+    # aborted game.
     if final is None:
         _echo(_status("[FAIL]", "game ended without final scores", "red"))
         raise typer.Exit(code=1)

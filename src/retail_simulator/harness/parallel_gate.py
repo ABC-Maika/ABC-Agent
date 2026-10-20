@@ -1,9 +1,6 @@
-"""The SuperSuit↔SB3 bridge + the multi-agent self-play learnability gate (Phase 0.5).
+"""The SuperSuit<->SB3 bridge + the multi-agent self-play learnability gate.
 
-Layer note: ``harness -> {envs, core, stable_baselines3, supersuit, gymnasium,
-pettingzoo}``; importing these here is allowed (forbidden only under ``core/``). The
-heavy RL imports (supersuit, sb3) are done LAZILY inside the functions so
-``import retail_simulator.harness`` stays cheap and does not hard-require ``[train]``.
+Layer note: ``harness -> {envs, core, stable_baselines3, supersuit, gymnasium, pettingzoo}``; importing these here is allowed (forbidden only under ``core/``). The heavy RL imports (supersuit, sb3) are done LAZILY inside the functions so ``import retail_simulator.harness`` stays cheap and does not hard-require ``[train]``.
 """
 
 from __future__ import annotations

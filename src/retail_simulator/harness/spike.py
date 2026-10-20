@@ -1,10 +1,8 @@
-"""Three public surfaces:
+"""Archetype spike: measure the intended LEAN → AGGRESSOR → PATIENT cycle.
 
-Layer note: ``harness`` tier. The heavy env/league imports are LAZY (inside
-:func:`run_spike`'s default rollout path) so importing this module stays cheap and
-sb3/pettingzoo-free — the same lazy-import discipline ``ladder`` follows. The bootstrap CI
-REUSES :func:`retail_simulator.harness.ladder._bootstrap_margin_ci` (no re-implementation).
-Stats are HAND-ROLLED in numpy (no scipy).
+Pairwise head-to-head rollouts between scripted archetypes, with the
+dominance/cycle read and bootstrap CIs (reused from ``ladder``). Heavy
+env/league imports stay lazy; stats are hand-rolled numpy (no scipy).
 """
 
 from __future__ import annotations
@@ -41,14 +39,12 @@ __all__ = [
 
 INTENDED_CYCLE_DIRECTION: tuple[str, str, str] = (LEAN, AGGRESSOR, PATIENT)
 
-# ----------------------------------------------------------------------------- #
-# spike_config — the feature-ON CoreConfig builder (SEED calibration values)     #
-# ----------------------------------------------------------------------------- #
+# --- spike_config: the spike's CoreConfig builder (seed values) ---
 
 _SEED_WAGE_BASE: float = 50.0
 _SEED_WAGE_OWN_SHARE_COEFF: float = 200.0
 _SEED_WAGE_COUPLING_COEFF: float = 0.5
-_SEED_WRITEOFF_SEVERITY_SCALE: float = 1.0  # arms draw #5
+_SEED_WRITEOFF_SEVERITY_SCALE: float = 1.0
 _SEED_WRITEOFF_FRAC_MIN: float = 0.0
 _SEED_WRITEOFF_FRAC_MAX: float = 0.05  # bounded %-of-turnover write-off
 _SEED_LEADER_WEIGHT_EXPONENT: float = 1.5  # > 1 taxes the biggest more (leader-weighted)
@@ -59,7 +55,10 @@ _SEED_OVERHEAD_EXPONENT: float = 1.5  # super-linear
 
 
 def spike_config(base: CoreConfig | None = None, **overrides: object) -> CoreConfig:
-    """ """
+    """Build the spike's feature-ON CoreConfig from the seed values.
+
+    ``overrides`` replace individual wage fields on top.
+    """
     resolved_base = base if base is not None else CoreConfig.default()
     wage_kwargs: dict[str, object] = {
         "cash_budget_enabled": True,
@@ -75,22 +74,13 @@ def spike_config(base: CoreConfig | None = None, **overrides: object) -> CoreCon
         "overhead_superlinear_coeff": _SEED_OVERHEAD_SUPERLINEAR_COEFF,
         "overhead_exponent": _SEED_OVERHEAD_EXPONENT,
     }
-    # Orchestrator overrides win (tune / ablate); an unknown key raises TypeError from
-    # the WageConfig constructor (fail fast at the boundary).
+    # Overrides win over the seed values; an unknown key raises TypeError from the
+    # WageConfig constructor.
     wage_kwargs.update(overrides)
     return replace(resolved_base, wage=WageConfig(**wage_kwargs))  # type: ignore[arg-type]
 
 
-# The TUNED operating-point overrides that close the decisive cycle. These are NOT the
-# seeds above — they are the committed, RE-MEASURED values.
-#
-#
-# PHASE 5.0 (B-3, OQ-2): lowered 1500.0 -> 150.0 so a human's ``wage_spend`` lever can
-# reach "pay to happiness" (required ≈ 90-225 vs a max pay of 250 at
-# ``wage_spend_scale=200`` below, instead of 800-1500 at the old coefficient). Inert on
-# the LOCKED archetype cycle — see the saturation argument in
-# :func:`calibrated_spike_config`'s docstring and its executable guard,
-# ``tests/harness/test_spike_calibrated_arming.py`` (re-verified green at the new point).
+# Calibrated operating-point overrides (distinct from the seed values above).
 _CALIBRATED_WAGE_OWN_SHARE_COEFF: float = 150.0
 _CALIBRATED_OVERHEAD_SUPERLINEAR_COEFF: float = 380.0
 _CALIBRATED_COGS_PREMIUM: float = 0.10
@@ -104,7 +94,7 @@ _CALIBRATED_WAREHOUSE_COST_PER_UNIT_INVEST: float = 200.0
 
 
 def calibrated_spike_config() -> CoreConfig:
-    """ """
+    """Build the calibrated spike CoreConfig on top of :func:`spike_config`."""
     base = spike_config(
         wage_own_share_coeff=_CALIBRATED_WAGE_OWN_SHARE_COEFF,
         overhead_superlinear_coeff=_CALIBRATED_OVERHEAD_SUPERLINEAR_COEFF,
@@ -131,21 +121,16 @@ def calibrated_spike_config() -> CoreConfig:
     )
 
 
-# ----------------------------------------------------------------------------- #
-# SpikeResult + the per-pair margin record                                       #
-# ----------------------------------------------------------------------------- #
+# --- SpikeResult and the per-pair margin record ---
 
 
 @dataclass(frozen=True)
 class PairMargin:
-    """The signed continuous margin of archetype A over archetype B over the seed set.
+    """One pair's margin (A over B) per seed, with mean, standard error, and bootstrap CI.
 
-    Mirrors :class:`retail_simulator.harness.ladder.PairwiseMargin`: ``per_seed_margins``
-    is ``mean(scores_a) − mean(scores_b)`` per seed, ``mean_margin`` is A's advantage over
-    B (negate for B-over-A), ``ci_low``/``ci_high`` are the bootstrap 95% CI on the mean
-    margin (seed-axis resample), and ``margin_se`` is the standard error of the seed mean
-    (population sd, ``ddof=0``, over ``sqrt(n_seeds)``). ``label_a < label_b`` (the
-    canonical sorted pair order).
+    ``label_a < label_b``; ``per_seed_margins`` is ``mean(scores_a) − mean(scores_b)``
+    per seed; ``ci_low``/``ci_high`` are the bootstrap 95% CI on the mean margin
+    (seed-axis resample); ``margin_se`` uses the population sd (``ddof=0``).
     """
 
     label_a: str
@@ -159,7 +144,7 @@ class PairMargin:
 
 @dataclass(frozen=True)
 class SpikeResult:
-    """ """
+    """Outcome of one spike run: pairwise margins plus the dominance/cycle read."""
 
     n_seeds: int
     seed_set: tuple[int, ...]
@@ -178,22 +163,16 @@ class SpikeResult:
     bootstrap_seed: int
 
 
-# ----------------------------------------------------------------------------- #
-# The cycle measurement (PURE — operates on collected per-seed margins)          #
-# ----------------------------------------------------------------------------- #
+# --- cycle measurement (pure: operates on collected per-seed margins) ---
 
 
 def _triple_cycles(
     triple: tuple[str, str, str],
     beats: dict[tuple[str, str], bool],
 ) -> tuple[str, str, str] | None:
-    """Return the cyclic order of a 3-node sub-tournament, or ``None`` if transitive.
+    """Return the cyclic order ``(a, b, c)`` of a 3-node sub-tournament, or ``None`` if transitive.
 
-    For three nodes a tournament (one directed edge per pair) is EITHER transitive (a
-    Condorcet winner — in-degrees the distinct ``{0, 1, 2}``) OR a single 3-cycle (every
-    node beats exactly one other — in-degrees all ``1``). ``beats[(x, y)]`` is True iff x
-    beats y. We detect the cycle by checking whether the directed edges form a closed
-    walk ``a→b→c→a`` (or the reverse); transitive ⇒ ``None``.
+    ``beats[(x, y)]`` is True iff x beats y.
     """
     a, b, c = triple
     # out-degree of each node within the triple
@@ -203,17 +182,14 @@ def _triple_cycles(
             out[x] += 1
         else:
             out[y] += 1
-    # Transitive ⇔ some node has out-degree 2 (beats both others — the Condorcet winner).
-    # Cyclic ⇔ every node has out-degree exactly 1.
+    # Transitive iff some node beats both others; otherwise it is a 3-cycle.
     if any(o == 2 for o in out.values()):
         return None
 
-    # 3-cycle: start at any node and follow the single out-edge twice to recover the
-    # order a→b→c→a. Pick the node each node beats.
+    # In a 3-cycle every node has exactly one out-edge; follow it to recover the order.
     def _beaten_by(node: str) -> str:
         others = [n for n in triple if n != node]
         x, y = others
-        # Exactly one of (node beats x) / (node beats y) holds in a 1-out-degree node.
         return x if beats[(node, x)] else y
 
     start = a
@@ -223,12 +199,7 @@ def _triple_cycles(
 
 
 def _same_cycle_up_to_rotation(realized: tuple[str, ...], intended: tuple[str, str, str]) -> bool:
-    """Whether two length-3 cyclic orders are equal up to rotation (NOT reflection).
-
-    ``(LEAN, AGGRESSOR, PATIENT)``, ``(AGGRESSOR, PATIENT, LEAN)``, and
-    ``(PATIENT, LEAN, AGGRESSOR)`` are the SAME directed cycle; the reverse
-    ``(LEAN, PATIENT, AGGRESSOR)`` is the OPPOSITE direction and does NOT match.
-    """
+    """Whether two length-3 cyclic orders are the same directed cycle (rotation, not reflection)."""
     if len(realized) != 3:
         return False
     rotations = {
@@ -250,23 +221,21 @@ def _measure_tournament(
     tuple[str, ...] | None,
     bool,
 ]:
-    """Build the dominance graph + cycle stats from the collected pairwise margins.
+    """Build the dominance graph and cycle stats from pairwise margins.
 
     Returns ``(dominance, n_cyclic_triples, has_condorcet_winner, condorcet_winner,
-    cycle_direction, decisive)``. ``decisive`` is True iff EVERY edge of the realized
-    3-cycle (when there is one) has a CI excluding 0 (a statistically real win); for a
-    transitive landscape ``decisive`` is False (there is no cycle to be decisive about).
+    cycle_direction, decisive)``; ``decisive`` is True iff every edge of the realized
+    cycle has a bootstrap CI excluding 0.
     """
-    # beats[(x, y)] = x beats y (mean margin of x over y > 0). Build both orientations.
+    # beats[(x, y)]: x beats y iff the mean margin is positive; build both orientations.
     beats: dict[tuple[str, str], bool] = {}
     ci_excludes_zero: dict[frozenset[str], bool] = {}
     margin_by_pair: dict[tuple[str, str], float] = {}
     for pm in pairwise:
-        # Stored A-over-B; A beats B iff mean_margin > 0.
         beats[(pm.label_a, pm.label_b)] = pm.mean_margin > 0.0
         beats[(pm.label_b, pm.label_a)] = pm.mean_margin < 0.0
         margin_by_pair[(pm.label_a, pm.label_b)] = pm.mean_margin
-        # A CI strictly above 0 or strictly below 0 excludes 0 (a decisive edge).
+        # A CI strictly above or below 0 is a decisive edge.
         ci_excludes_zero[frozenset((pm.label_a, pm.label_b))] = pm.ci_low > 0.0 or pm.ci_high < 0.0
 
     dominance: dict[str, tuple[str, ...]] = {
@@ -282,8 +251,7 @@ def _measure_tournament(
             break
     has_condorcet_winner = condorcet_winner is not None
 
-    # Count cyclic 3-subsets; capture the realized direction of the (single, for a
-    # 3-roster) cycle and whether its edges are all CI-decisive.
+    # Count cyclic triples; capture the first realized direction and its CI-decisiveness.
     n_cyclic_triples = 0
     cycle_direction: tuple[str, ...] | None = None
     decisive = False
@@ -311,9 +279,7 @@ def _measure_tournament(
     )
 
 
-# ----------------------------------------------------------------------------- #
-# The default REAL rollout seam                                                  #
-# ----------------------------------------------------------------------------- #
+# --- default real rollout seam ---
 
 
 def _default_head_to_head(
@@ -321,30 +287,14 @@ def _default_head_to_head(
     *,
     env_factory: Callable[[], Any] | None = None,
 ) -> Callable[..., tuple[list[float], list[float]]]:
-    """Build the REAL head-to-head seam over a ``RetailParallelEnv`` with the spike config.
+    """Build the default head-to-head seam over a ``RetailParallelEnv``.
 
-    Returns a ``head_to_head(predict_a, predict_b, *, n_episodes, seed) -> (scores_a,
-    scores_b)`` closure that reuses the EXISTING position-controlled primitive
-    (:func:`retail_simulator.harness.league._position_controlled_head_to_head`) on ONE
-    shared :class:`RetailParallelEnv(config, n_learning_agents=2)`. The primitive
-    re-seeds the world per call (``env.reset(seed=...)``), so a single env is correct and
-    deterministic across all pairs/seeds (the ladder pattern). Heavy imports are LAZY
-    (pettingzoo + the league primitive) so importing this module stays cheap.
-
-    ``env_factory`` (S5, the arena-with-homes seam — ``harness/geo_archetypes.py`` /
-    ``scripts/phase6_geo_tournament.py``) is the OPTIONAL Concern-B byte-identity hook
-    :func:`retail_simulator.harness.league._position_controlled_head_to_head` already
-    exposes: when given, a FRESH env is built (and closed) per (episode, seat-rotation)
-    call via ``env_factory()`` instead of reusing ONE persistent env, letting a caller
-    supply e.g. ``home_regions`` (which ``run_spike``/this function cannot express on
-    their own — there is no seam here for it). ``None`` (the default) reproduces the
-    pre-S5 construction byte-for-byte — this function does not otherwise own or close
-    an env in that case.
-
-    The caller (:func:`run_spike`) owns the env lifecycle via the returned closure's
-    ``close`` attribute (``None`` when ``env_factory`` is given — the per-call envs are
-    already opened/closed inside the primitive itself, so there is nothing left for
-    ``run_spike`` to close afterward).
+    Returns a ``head_to_head(predict_a, predict_b, *, n_episodes, seed)`` closure over
+    the league's position-controlled primitive, on one shared env; the primitive re-seeds
+    the world per call, so a single env is deterministic across all pairs and seeds.
+    With ``env_factory``, a fresh env is built (and closed) per call instead, letting the
+    caller pass extras like ``home_regions``. The closure's ``close`` attribute releases
+    the shared env; it is ``None`` when ``env_factory`` is given. Heavy imports stay lazy.
     """
     from retail_simulator.harness.league import (  # noqa: PLC0415
         _position_controlled_head_to_head,
@@ -391,7 +341,7 @@ def _default_head_to_head(
             seed=seed,
         )
 
-    # Expose the env so run_spike can close it after the rollouts (correct lifecycle).
+    # Expose the env so run_spike can close it after the rollouts.
     head_to_head.close = env.close  # type: ignore[attr-defined]
     return head_to_head
 
@@ -408,7 +358,7 @@ def run_spike(
     head_to_head: Callable[..., tuple[list[float], list[float]]] | None = None,
     env_factory: Callable[[], Any] | None = None,
 ) -> SpikeResult:
-    """ """
+    """Roll out every archetype pair over the seed set and report the cycle verdict."""
     roster = archetypes if archetypes is not None else default_archetypes()
     if len(roster) < 3:
         raise ValueError(
@@ -426,7 +376,7 @@ def run_spike(
     seed_set = tuple(range(seed_offset, seed_offset + n_seeds))
     labels = tuple(sorted(roster))
 
-    # Select the rollout seam. The default REAL path owns an env we must close after.
+    # Select the rollout seam; the default seam owns an env to close after the rollouts.
     owns_env_close: Callable[[], None] | None = None
     if head_to_head is None:
         real_seam = _default_head_to_head(effective_config, env_factory=env_factory)
@@ -453,10 +403,9 @@ def run_spike(
         if owns_env_close is not None:
             owns_env_close()
 
-    # Bootstrap: draw seed-INDEX resamples ONCE (independent RNG, not tied to rollout
-    # seeds), applied CONSISTENTLY across pairs (the ladder coherence contract). Each
-    # pair is its own 2-node "field" so _bootstrap_margin_ci over the single opponent
-    # yields the CI on that pair's mean margin.
+    # Draw the seed-index resamples once (independent of rollout seeds) and apply them
+    # consistently to every pair; each pair is its own 2-node field, so the ladder
+    # bootstrap yields the CI on that pair's mean margin.
     rng = np.random.default_rng(bootstrap_seed)
     resampled_seed_indices = rng.integers(0, n_seeds, size=(bootstrap_resamples, n_seeds))
     pair_per_seed: dict[tuple[str, str], np.ndarray] = {
@@ -468,8 +417,6 @@ def run_spike(
         per_seed_arr = pair_per_seed[(label_a, label_b)]
         mean_margin = float(per_seed_arr.mean())
         margin_se = float(np.std(per_seed_arr, ddof=0)) / sqrt(n_seeds)
-        # Reuse the ladder bootstrap: a's field over the single opponent b is exactly
-        # a's margin over b (no re-implementation of the seed-resample math).
         ci_low, ci_high = _bootstrap_margin_ci(
             label_a,
             [label_b],

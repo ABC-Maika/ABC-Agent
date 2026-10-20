@@ -1,12 +1,8 @@
-"""The NPC calibrate loop — measure each archetype's competence vs random (Phase 0.5).
+"""The NPC calibrate loop — measure each archetype's competence vs random.
 
-Plus :func:`reward_variance_check` — a reward variance-balance / boundedness signal over
-a random rollout (reuses :func:`~retail_simulator.core.reward.reward_variance_balance`):
-the four un-normalized components' variances within ~3× and no degenerate (zero-variance)
-component. REPORTED, NEVER gates (like the diversity report).
+Plus :func:`reward_variance_check` — a reward variance-balance / boundedness signal over a random rollout (the four un-normalized components' variances within ~3×, no degenerate component). REPORTED, NEVER gates.
 
-Layer note: ``harness -> {envs, core}``; this module imports ONLY ``core`` (the fast seam
-+ the scripted policies + the reward health check) — no RL framework, no envs. Numpy only.
+Layer note: this module imports ONLY ``core`` (the fast seam + the scripted policies + the reward health check) — no RL framework, no envs. Numpy only.
 """
 
 from __future__ import annotations
@@ -42,10 +38,7 @@ PRIMARY_METRIC: dict[str, str] = {
 def _make_archetype(name: str, schema: ActionSchema) -> NPCPolicy:
     """Instantiate the scripted policy for an archetype name (the calibrate roster).
 
-    Mirrors ``world._make_npc_policy`` but local to the harness (the calibrate loop is a
-    measurement tool, not the seam) so it can drive an archetype's ``act`` directly into
-    a LEARNING seat's joint action. Each policy is built with the world's schema so its
-    encoded action matches the contract the seam decodes.
+    Local to the harness so an archetype's ``act`` can be driven directly into a learning seat's joint action.
     """
     if name == "discounter":
         return Discounter(schema=schema)
@@ -57,7 +50,7 @@ def _make_archetype(name: str, schema: ActionSchema) -> NPCPolicy:
 
 
 def _two_learning_seat_config(config: CoreConfig | None) -> CoreConfig:
-    """ """
+    """Force the config to 2 learning seats (seat 0 present in every region)."""
     base = config if config is not None else CoreConfig.default()
     region_cfgs = base.demand.regions
     n_regions = len(region_cfgs) if region_cfgs else 1
@@ -78,11 +71,7 @@ def _score_seat0_metric(
 ) -> dict[str, float]:
     """Run one rollout; return seat 0's mean per-tick reward components.
 
-    Seat 0 is driven by ``seat0_policy`` (an archetype's ``act``) when given, else by a
-    RANDOM agent (the baseline). Seat 1 is ALWAYS a RANDOM opponent (a fixed-seed random
-    field, so the archetype and its baseline face the SAME opponent distribution). The
-    rollout reads seat 0's UN-normalized ``info['components']`` each tick and returns the
-    per-component MEAN over the horizon — the basis for the primary-metric margin.
+    Seat 0 is driven by ``seat0_policy`` when given, else by a RANDOM agent (the baseline); seat 1 is ALWAYS a random opponent with a fixed-seed field, so archetype and baseline face the SAME opponent distribution.
     """
     world = World(config=config, seed=seed)
     state = world.reset(seed)
@@ -109,11 +98,7 @@ def _score_seat0_metric(
 def _action_bounds(schema: ActionSchema) -> tuple[np.ndarray, np.ndarray]:
     """Per-dimension (low, high) of the flat action layout, for a random sampler.
 
-    Mirrors the env's action Box bounds WITHOUT importing ``envs`` (the calibrate loop
-    stays core-only): a continuous lever spans ``[low, high]``; the trailing discrete
-    expansion block is sampled in ``[0, 1]`` (its logits, argmax-decoded). The random
-    seat's action is decoded + clipped by the seam anyway, so this only needs to span the
-    representative range.
+    A continuous lever spans ``[low, high]``; the trailing discrete expansion block is sampled in ``[0, 1]`` (its logits, argmax-decoded). Mirrors the env's Box bounds WITHOUT importing ``envs``.
     """
     lows: list[float] = []
     highs: list[float] = []
@@ -121,9 +106,8 @@ def _action_bounds(schema: ActionSchema) -> tuple[np.ndarray, np.ndarray]:
         if lever.low is not None and lever.high is not None:
             lows.append(float(lever.low))
             highs.append(float(lever.high))
-    # The trailing dims past the continuous levers are the discrete expansion logit
-    # block (argmax-decoded); sample each logit in [0, 1]. total_dim is the SoT for the
-    # flat action width, so the block width is total_dim - (continuous lever count).
+    # The trailing dims past the continuous levers are the discrete expansion logit block
+    # (argmax-decoded); sample each logit in [0, 1].
     block = schema.total_dim - len(lows)
     lows.extend(0.0 for _ in range(block))
     highs.extend(1.0 for _ in range(block))
@@ -137,7 +121,7 @@ def _sample_action(rng: np.random.Generator, low: np.ndarray, high: np.ndarray) 
 
 @dataclass(frozen=True)
 class ArchetypeCalibration:
-    """ """
+    """One archetype's measured beat-random margin on its primary metric."""
 
     archetype: str
     primary_metric: str
@@ -157,12 +141,7 @@ def calibrate_archetype(
 ) -> ArchetypeCalibration:
     """Measure one archetype's beat-random margin on its primary metric (the fast seam).
 
-    Runs the archetype in seat 0 vs a random opponent, and a random agent in seat 0 vs
-    the SAME opponent, over ``seeds`` rollouts; the margin is the fractional improvement
-    of the archetype's mean primary metric over the random baseline's. NO PPO — the pure
-    :class:`World` seam only, so it is fast. Returns an :class:`ArchetypeCalibration`;
-    the orchestrator tunes the archetype's (module-constant) lever values until the
-    margin lands in the 20–65% band. Raises on an unknown archetype name.
+    Runs the archetype in seat 0 vs a random opponent, and a random agent in seat 0 vs the SAME opponent, over ``seeds`` rollouts; the margin is the fractional improvement over the random baseline. NO PPO — the pure ``World`` seam only, so it is fast. Raises on an unknown archetype name.
     """
     if archetype not in PRIMARY_METRIC:
         raise ValueError(f"unknown archetype {archetype!r}; known: {sorted(PRIMARY_METRIC)}")
@@ -201,8 +180,7 @@ def calibrate_archetype(
 def _fractional_margin(archetype_score: float, random_score: float) -> float:
     """``(archetype − random) / |random|`` — the fractional beat-random margin.
 
-    ``inf`` when the random baseline is ~0 and the archetype scores positive (an
-    unbounded relative beat); 0.0 when both are ~0 (no signal either way).
+    ``inf`` when the random baseline is ~0 and the archetype scores positive; 0.0 when both are ~0.
     """
     if abs(random_score) <= 1e-12:
         return float("inf") if archetype_score > 0.0 else 0.0
@@ -215,7 +193,7 @@ def calibrate_all(
     seeds: tuple[int, ...] = DEFAULT_SEEDS,
     horizon: int = DEFAULT_HORIZON_TICKS,
 ) -> dict[str, ArchetypeCalibration]:
-    """ """
+    """Measure every archetype in ``PRIMARY_METRIC``."""
     return {
         archetype: calibrate_archetype(archetype, config=config, seeds=seeds, horizon=horizon)
         for archetype in PRIMARY_METRIC
@@ -228,7 +206,7 @@ def reward_variance_check(
     seed: int = 0,
     horizon: int = DEFAULT_HORIZON_TICKS,
 ) -> dict[str, float]:
-    """ """
+    """Reward variance-balance over a random 2-seat rollout (reported, never gates)."""
     schema = default_action_schema()
     cfg = _two_learning_seat_config(config)
     world = World(config=cfg, seed=seed)
@@ -246,8 +224,7 @@ def reward_variance_check(
         a0 = _sample_action(action_rng, low, high)
         a1 = _sample_action(action_rng, low, high)
         result = world.step(state, {_ARCHETYPE_SEAT: a0, _OPPONENT_SEAT: a1})
-        # The seam already exposes seat 0's UN-normalized components in info (the SoT);
-        # collect them straight off the StepResult — no recomputation.
+        # The seam already exposes the un-normalized components in info; collect them directly.
         components = result.infos[_ARCHETYPE_SEAT]["components"]
         assert isinstance(components, dict)
         for key in trajectories:

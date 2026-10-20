@@ -1,8 +1,6 @@
-"""Phase 1.4 scenario curriculum: 6-segment world + training-time scenario sampler.
+"""6-segment world scenario curriculum + training-time scenario sampler.
 
-The module sits in the harness layer (``harness -> {envs, core, gymnasium,
-pettingzoo, ...}``); no schema bump (F6-A schema UNCHANGED at v10); no new
-RNG in core; no obs/action delta.
+Harness layer; no schema bump (v10 UNCHANGED), no new RNG in core, no obs/action delta.
 """
 
 from __future__ import annotations
@@ -62,7 +60,7 @@ PHASE_1_4_BARGAIN_SEEKER_PROFILE: SegmentParams = SegmentParams(
 
 
 def phase_1_4_six_segments() -> dict[str, SegmentParams]:
-    """ """
+    """The 6-segment table: default segments plus the premium-hunter / bargain-seeker profiles."""
     segments = default_segments()
     segments[PREMIUM_HUNTER] = PHASE_1_4_PREMIUM_HUNTER_PROFILE
     segments[BARGAIN_SEEKER] = PHASE_1_4_BARGAIN_SEEKER_PROFILE
@@ -86,9 +84,8 @@ _VARIANT_A_REGION_1_MIX: dict[str, float] = {
     BARGAIN_SEEKER: 0.10,
 }
 
-# Variant B (the "premium-leaning" mix): region 0 premium-hunter-heavy, region 1 a
-# more even brand-loyal/PREMIUM_HUNTER split — the curriculum exercises a regime
-# where the new under-reference-aversion axis is load-bearing.
+# Variant B (premium-leaning): region 0 premium-hunter-heavy, region 1 a more even
+# brand-loyal/premium-hunter split.
 _VARIANT_B_REGION_0_MIX: dict[str, float] = {
     PRICE_SENSITIVE: 0.15,
     QUALITY_SEEKING: 0.20,
@@ -106,9 +103,8 @@ _VARIANT_B_REGION_1_MIX: dict[str, float] = {
     BARGAIN_SEEKER: 0.10,
 }
 
-# Variant C (the "bargain-leaning" mix): region 0 bargain-seeker-heavy, region 1
-# brand-loyal-heavy with non-trivial BARGAIN_SEEKER — exercises the promotion-dominant
-# regime + the new forward-buying amplification.
+# Variant C (bargain-seeking): region 0 bargain-seeker-heavy, region 1 brand-loyal-heavy
+# with non-trivial bargain-seeker.
 _VARIANT_C_REGION_0_MIX: dict[str, float] = {
     PRICE_SENSITIVE: 0.20,
     QUALITY_SEEKING: 0.10,
@@ -126,8 +122,7 @@ _VARIANT_C_REGION_1_MIX: dict[str, float] = {
     BARGAIN_SEEKER: 0.20,
 }
 
-# Region 0 (large) / region 1 (smaller) pie sizes — kept at the 0.4 defaults so the
-# curriculum varies the MIX, not the SIZE (per F3-A: static per-region variants).
+# Region 0 (large) / region 1 (smaller) pie sizes — the curriculum varies the mix, not the size.
 _PHASE_1_4_REGION_0_DEMAND: float = 1000.0
 _PHASE_1_4_REGION_1_DEMAND: float = 600.0
 
@@ -140,11 +135,7 @@ def _phase_1_4_demand_config(
 ) -> DemandConfig:
     """Build a 2-region ``DemandConfig`` with the given per-region 6-segment mixes.
 
-    Other ``DemandConfig`` fields (price_elasticity, noise_sigma) come from ``base`` —
-    the regression sweep passes ``CoreConfig.default().demand`` so the rest of the
-    world's economics are unchanged; only the per-region mix changes. The fallback
-    scalar ``segment_mix`` field is also set to the region-0 mix so a single-region
-    fallback (an empty ``regions`` tuple) would reproduce region 0.
+    Other ``DemandConfig`` fields come from ``base`` (defaults to ``CoreConfig.default().demand``); only the per-region mix changes. The fallback scalar ``segment_mix`` mirrors the region-0 mix.
     """
     base_demand = base if base is not None else CoreConfig.default().demand
     return replace(
@@ -170,7 +161,7 @@ def phase_1_4_six_segment_config(
     region_0_mix: dict[str, float] | None = None,
     region_1_mix: dict[str, float] | None = None,
 ) -> CoreConfig:
-    """ """
+    """6-segment world config with (optionally) overridden per-region mixes; variant A by default."""
     base = base_config if base_config is not None else CoreConfig.default()
     r0 = region_0_mix if region_0_mix is not None else _VARIANT_A_REGION_0_MIX
     r1 = region_1_mix if region_1_mix is not None else _VARIANT_A_REGION_1_MIX
@@ -186,7 +177,7 @@ def phase_1_4_six_segment_config(
 
 @runtime_checkable
 class ScenarioDistribution(Protocol):
-    """ """
+    """Protocol: a tuple of scenarios + a ``sample(rng)`` draw."""
 
     scenarios: tuple[CoreConfig, ...]
 
@@ -196,7 +187,7 @@ class ScenarioDistribution(Protocol):
 
 @dataclass(frozen=True)
 class UniformScenarioDistribution:
-    """ """
+    """Sample scenarios uniformly at random; requires at least one scenario."""
 
     scenarios: tuple[CoreConfig, ...]
 
@@ -213,7 +204,7 @@ class UniformScenarioDistribution:
         return self.scenarios[index]
 
 
-# --- The basic Phase 1.4 curriculum (3 variants) -----------------------------
+# --- The basic curriculum (3 variants) ---------------------------------------
 
 
 PHASE_1_4_BASIC_CURRICULUM_NAME: str = "phase_1_4_basic"
@@ -222,15 +213,9 @@ PHASE_1_4_BASIC_CURRICULUM_NAME: str = "phase_1_4_basic"
 def phase_1_4_basic_curriculum(
     base_config: CoreConfig | None = None,
 ) -> UniformScenarioDistribution:
-    """Build the basic curriculum: 3 variants of the 6-segment world (F4-A + F3-A).
+    """Build the basic curriculum: 3 variants of the 6-segment world (balanced / premium-leaning / bargain-seeking).
 
-    Three per-region 6-segment mix variants — balanced / premium-leaning /
-    bargain-leaning (each a different "competitive regime" the learner sees). The
-    curriculum samples one uniformly at each ``CurriculumEnvWrapper.reset()``;
-    PPO is trained across the distribution and learns a policy robust over the
-    six-segment competitive regimes. ``base_config`` lets the caller layer extra
-    knobs (e.g. ``loyalty_gate_config(...)``) on the base BEFORE the per-region
-    mix is swapped in.
+    The curriculum samples one uniformly at each reset; a PPO trained across the distribution learns a policy robust over the competitive regimes. ``base_config`` lets the caller layer extra knobs BEFORE the per-region mix is swapped in.
     """
     return UniformScenarioDistribution(
         scenarios=(
@@ -261,11 +246,7 @@ _CURRICULUM_REGISTRY: dict[str, Any] = {
 def known_curricula() -> tuple[str, ...]:
     """The names of curricula the CLI's ``--curriculum=<name>`` flag accepts.
 
-    A small registry of name → builder. The CLI looks up the builder, calls it
-    (with the same ``base_config`` it would otherwise pass straight through to the
-    gate), and threads the returned ``ScenarioDistribution`` into
-    :func:`harness.parallel_gate.run_parallel_gate`. Default ``None`` ⇒ no
-    curriculum (the 1.3 CLI behavior is preserved).
+    A small name → builder registry; default ``None`` ⇒ no curriculum.
     """
     return tuple(sorted(_CURRICULUM_REGISTRY))
 
@@ -273,10 +254,7 @@ def known_curricula() -> tuple[str, ...]:
 def build_curriculum(name: str, base_config: CoreConfig | None = None) -> ScenarioDistribution:
     """Look up a curriculum builder by name and call it.
 
-    Used by the CLI to map ``--curriculum=<name>`` onto a ``ScenarioDistribution``.
-    An unknown name raises ``ValueError`` listing the known names — boundary
-    validation, never a silent fallback. ``base_config`` is passed straight to
-    the builder so the curriculum can layer the gate scenario's knobs on top.
+    An unknown name raises ``ValueError`` listing the known names (boundary validation, never a silent fallback).
     """
     if name not in _CURRICULUM_REGISTRY:
         raise ValueError(f"unknown curriculum {name!r}; known curricula: {list(known_curricula())}")
@@ -295,20 +273,14 @@ def build_curriculum(name: str, base_config: CoreConfig | None = None) -> Scenar
 # --- CurriculumEnvWrapper ----------------------------------------------------
 
 
-# Lazy / module-top import: pettingzoo's ``ParallelEnv`` is the base class
-# SuperSuit's ``pettingzoo_env_to_vec_env_v1`` requires via an ``isinstance``
-# check (see ``supersuit/vector/vector_constructors.py`` — the bridge does NOT
-# duck-type). Inheriting it here makes the curriculum wrapper a first-class
-# PettingZoo Parallel env so ``build_parallel_vec_env(curriculum=...)`` and any
-# Slice B composition (e.g. ``LeagueEnvWrapper(CurriculumEnvWrapper(env))``)
-# bridge end-to-end without a downstream adapter shim. Mirrors the import
-# locality :mod:`retail_simulator.harness.league` adopts for the league wrapper
-# (the same SuperSuit-isinstance gap surfaced in 1.5 Slice A).
+# pettingzoo's ParallelEnv is the base class SuperSuit's bridge requires via an isinstance
+# check (it does not duck-type); inheriting it makes the wrapper a first-class PettingZoo
+# Parallel env. The module-top import is the documented, stable pattern.
 from pettingzoo import ParallelEnv  # noqa: E402 - kept near the wrapper for locality
 
 
 class CurriculumEnvWrapper(ParallelEnv):  # type: ignore[misc, unused-ignore]
-    """ """
+    """PettingZoo Parallel wrapper that resamples a scenario (rebuilding the env) on every reset."""
 
     metadata: dict[str, Any] = {"name": "retail_sim_curriculum_parallel_v0", "render_modes": []}
 
@@ -323,13 +295,9 @@ class CurriculumEnvWrapper(ParallelEnv):  # type: ignore[misc, unused-ignore]
     ) -> None:
         """Seed the curriculum RNG and build the FIRST scenario's parallel env.
 
-        ``curriculum_seed`` keys the harness-only ``np.random.default_rng`` used
-        for scenario picks; ``core_seed`` is the per-episode core RNG seed for the
-        FIRST built env (the wrapper rebuilds on every ``reset()``, so subsequent
-        episodes use the seed passed to ``reset(seed=...)``).
+        ``curriculum_seed`` keys the scenario-pick RNG; ``core_seed`` seeds the first built env (later episodes use the seed passed to ``reset(seed=...)``).
         """
-        # Lazy import to keep ``harness.curriculum`` cheap to import: the parallel
-        # env pulls pettingzoo at module load (a 1.5+s import).
+        # Lazy import: the parallel env pulls pettingzoo at module load.
         from retail_simulator.envs.parallel_env import RetailParallelEnv
 
         self._distribution = distribution
@@ -337,11 +305,9 @@ class CurriculumEnvWrapper(ParallelEnv):  # type: ignore[misc, unused-ignore]
         self._npc_archetypes = npc_archetypes
         self._curriculum_rng: np.random.Generator = np.random.default_rng(curriculum_seed)
         self._curriculum_seed = curriculum_seed
-        # Build an INITIAL env from the first scenario so ``observation_space``/
-        # ``action_space`` are queryable BEFORE the first reset (the PettingZoo
-        # API surface convention). The first scenario is drawn from a SNAPSHOT of
-        # the curriculum rng so it is reproducible without consuming the rng's
-        # state (the first ``reset()`` will redraw — the natural pattern).
+        # Build an INITIAL env from the first scenario so the spaces are queryable BEFORE
+        # the first reset. The draw uses a SNAPSHOT of the curriculum rng (reproducible
+        # without consuming its state; the first reset redraws).
         first_config = self._distribution.sample(np.random.default_rng(curriculum_seed))
         self._env: RetailParallelEnv = RetailParallelEnv(
             first_config,
@@ -352,11 +318,8 @@ class CurriculumEnvWrapper(ParallelEnv):  # type: ignore[misc, unused-ignore]
         # The PettingZoo agent interface delegates straight to the wrapped env.
         self.possible_agents: list[str] = list(self._env.possible_agents)
         self.agents: list[str] = list(self.possible_agents)
-        # SuperSuit's MarkovVectorEnv reads ``par_env.unwrapped.render_mode`` (the
-        # 0.5 bridge documented gap; same fix applied at the parallel-env layer).
-        # Setting render_mode = None on the wrapper makes the bridge see a
-        # well-defined attribute regardless of whether the wrapper is treated as
-        # the env or unwrapped (we expose ``unwrapped`` returning self below).
+        # render_mode = None on the wrapper so SuperSuit's bridge (which reads
+        # unwrapped.render_mode) sees a well-defined attribute.
         self.render_mode: Any = None
         # Track the last sampled config (a DX hook for ``info`` / diagnostics).
         self._last_scenario: CoreConfig = first_config
@@ -365,17 +328,13 @@ class CurriculumEnvWrapper(ParallelEnv):  # type: ignore[misc, unused-ignore]
     def unwrapped(self) -> "CurriculumEnvWrapper":
         """The "innermost" env — we are the outermost wrapper, so return self.
 
-        SuperSuit's ``MarkovVectorEnv`` accesses ``par_env.unwrapped.render_mode``;
-        a wrapper that returned the underlying ``RetailParallelEnv`` here would
-        leak the inner env's reference (which is rebuilt every ``reset()``), so
-        we return ``self`` and expose ``render_mode`` on the wrapper. The wrapper
-        IS the conceptual "env" the bridge sees.
+        The inner RetailParallelEnv is rebuilt every reset(), so returning it would leak a stale reference; the wrapper IS the env the bridge sees.
         """
         return self
 
     @property
     def curriculum_rng(self) -> np.random.Generator:
-        """ """
+        """The harness-only RNG used for scenario picks."""
         return self._curriculum_rng
 
     @property
@@ -406,21 +365,13 @@ class CurriculumEnvWrapper(ParallelEnv):  # type: ignore[misc, unused-ignore]
     ) -> tuple[dict[str, npt.NDArray[np.float32]], dict[str, dict[str, Any]]]:
         """Draw the next scenario, rebuild the env, and return its ``(observations, infos)``.
 
-        The curriculum draw happens HERE (NOT inside ``World.step`` — F5-A): the
-        next ``CoreConfig`` is sampled from ``distribution`` via
-        ``curriculum_rng``; a fresh ``RetailParallelEnv`` is constructed from
-        that config (same seat plan, same N/M); the new env's ``reset(seed)`` is
-        called and its output returned. The ``seed`` argument seeds the new env's
-        CORE PCG64 (the per-tick draw stream) — the curriculum_rng is NOT advanced
-        by reset's seed argument. This is the isolation contract.
+        The draw happens here (NOT inside ``World.step``): a fresh env is constructed from the sampled config (same seat plan); the new env's ``reset(seed)`` is called. ``seed`` seeds the new env's CORE PCG64 only — the curriculum RNG is NOT advanced by it.
         """
         from retail_simulator.envs.parallel_env import RetailParallelEnv
 
         scenario = self._distribution.sample(self._curriculum_rng)
         self._last_scenario = scenario
-        # Close the prior env (frees its World resources); rebuild from the new
-        # config. PettingZoo's parallel envs are cheap to construct (one World
-        # object + numpy buffers).
+        # Close the prior env; rebuild from the new config (parallel envs are cheap to construct).
         self._env.close()
         self._env = RetailParallelEnv(
             scenario,
@@ -441,7 +392,7 @@ class CurriculumEnvWrapper(ParallelEnv):  # type: ignore[misc, unused-ignore]
         dict[str, bool],
         dict[str, dict[str, Any]],
     ]:
-        """ """
+        """Forward one tick to the wrapped env."""
         observations, rewards, term, trunc, infos = self._env.step(actions)
         self.agents = list(self._env.agents)
         return observations, rewards, term, trunc, infos
@@ -453,7 +404,7 @@ class CurriculumEnvWrapper(ParallelEnv):  # type: ignore[misc, unused-ignore]
 
 @dataclass(frozen=True)
 class RecipeIVRegressionResult:
-    """ """
+    """The regression sweep verdicts for the SCM and automation legs."""
 
     scm_degenerate: bool
     scm_reason: str
@@ -476,12 +427,11 @@ def phase_1_4_recipe_iv_regression_sweep(
     seeds: tuple[int, ...] = (0, 1, 2),
     start_present_both: bool = True,
 ) -> RecipeIVRegressionResult:
-    """ """
+    """Run both legs of the regression sweep (SCM service grid + automation timing) on the 6-segment world."""
     base = six_segment_config if six_segment_config is not None else phase_1_4_six_segment_config()
 
-    # SCM leg: layer the SCM scenario knobs on top of the 6-segment base (the
-    # ``base_segments`` keyword preserves the 6-segment dict and adds CONVENIENCE-
-    # beta_service on top — the regression "extension point" introduced for 1.4).
+    # SCM leg: layer the SCM scenario knobs on the 6-segment base (base_segments preserves
+    # the 6-segment dict).
     scm_config = scm_gate_config(base, base_segments=phase_1_4_six_segments())
     scm_result = run_sweep(
         scm_config,
@@ -545,7 +495,7 @@ def phase_1_4_recipe_iv_regression_sweep(
 
 @dataclass(frozen=True)
 class GeneralizationReport:
-    """ """
+    """Curriculum vs fixed-model per-scenario score comparison."""
 
     mean_curriculum_score: float
     mean_fixed_score: float
@@ -565,7 +515,7 @@ def _evaluate_policy_in_config(
     npc_archetypes: tuple[str, ...],
     seed: int,
 ) -> float:
-    """ """
+    """Mean stationary episode score of a policy in one scenario config."""
     from retail_simulator.harness.parallel_gate import _episode_stationary_score
 
     # Lazy import: the parallel env pulls pettingzoo (a 1.5+s import).
@@ -598,7 +548,7 @@ def evaluate_generalization(
     npc_archetypes: tuple[str, ...] = ("discounter",),
     seed: int = 0,
 ) -> GeneralizationReport:
-    """ """
+    """Compare a curriculum-trained model against a fixed-scenario model across held-out scenarios."""
     scenarios_tuple = tuple(scenarios)
     if not scenarios_tuple:
         raise ValueError(

@@ -209,7 +209,7 @@ def _resolve_world(args: argparse.Namespace) -> tuple[CoreConfig, str, dict[str,
 
 
 def _effective_knobs(cfg: CoreConfig) -> dict[str, float]:
-    """ """
+    """The effective knob values of the match's world, as a flat dict for the CSV/JSON."""
     knobs: dict[str, float] = {
         "overhead_reference_stores": cfg.wage.overhead_reference_stores,
         "overhead_exponent": cfg.wage.overhead_exponent,
@@ -264,12 +264,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.overhead is not None and args.balanced:
         parser.error("--overhead builds its own world from arena_config(); drop --balanced")
     if args.overhead is not None and args.overhead_reference_stores is not None:
-        # MINOR 3 (senior review, round 2): --overhead already IS overhead_reference_stores
-        # (it builds arena_config(overhead_reference_stores=VALUE) directly) -- combining it
-        # with the --overhead-reference-stores brake would build a world at one value while
-        # the "env" label (which --overhead computes FROM its own argument) names the other,
-        # a silent mismatch (measured: --overhead 4.2 --overhead-reference-stores 7.15 ->
-        # label says 4.2, world holds 7.15). Reject the pair, exactly like --balanced above.
+        # --overhead already sets overhead_reference_stores (it builds the world from that value), so
+        # combining it with the brake would build one world but label another -- a silent mismatch.
+        # Reject the pair, like --balanced above.
         parser.error(
             "--overhead already sets overhead_reference_stores; drop --overhead-reference-stores"
         )

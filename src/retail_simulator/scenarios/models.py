@@ -1,10 +1,7 @@
-"""``ScenarioConfig`` is the YAML-backed, boundary-validated surface the Operator edits
-(REQUIREMENTS: edit scenario YAML → validate → calibrate → gate → competition). It
-maps a small, YAGNI-minimal set of operator knobs onto the framework-free
-:class:`~retail_simulator.core.config.CoreConfig` + a seat plan
-(:class:`~retail_simulator.core.config.SeatSpec` tuple), reusing ``core``'s validation
-(``validate_expansion_capacity``, ``_validate_segment_mix``, ``STARTING_CASH``,
-``NPC_ARCHETYPES``) — it re-implements NO world rules.
+"""``ScenarioConfig`` is the YAML-backed, boundary-validated surface the operator edits.
+
+It maps a small set of operator knobs onto the framework-free ``CoreConfig`` + a
+seat plan, reusing ``core``'s validation — it re-implements no world rules.
 """
 
 from __future__ import annotations
@@ -69,10 +66,7 @@ _COMPETITION_BETA_REFERENCE: float = 1.5
 class RegionSpec(BaseModel):
     """One region's operator-overridable demand knobs (maps to ``RegionConfig``).
 
-    ``base_regional_demand`` is the region's pie; ``segment_mix`` splits it by segment
-    and MUST sum to 1.0 (the same invariant ``core``'s ``_validate_segment_mix``
-    enforces — reused here so a malformed mix is rejected at the boundary, not silently
-    absorbed into broken share invariants).
+    ``base_regional_demand`` is the region's pie; ``segment_mix`` splits it and MUST sum to 1.0 (the same invariant ``core`` enforces).
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -83,8 +77,7 @@ class RegionSpec(BaseModel):
     @field_validator("segment_mix")
     @classmethod
     def _mix_sums_to_one(cls, mix: dict[str, float]) -> dict[str, float]:
-        # Reuse core's segment-mix semantics (non-empty, non-negative, sums to 1.0)
-        # so the scenario surface and the world model validate IDENTICALLY.
+        # Reuse core's segment-mix validation so the boundary and the world model match.
         _validate_segment_mix(mix)
         return mix
 
@@ -97,11 +90,9 @@ class RegionSpec(BaseModel):
 
 
 class RewardWeights(BaseModel):
-    """The four DESIGN-locked reward weights ({.5/.2/.2/.1}); sum-to-1.0 if weighted.
+    """The reward weights (defaults {.5/.2/.2/.1}).
 
-    Defaults reproduce ``RewardConfig``'s locked weights. The sum-to-1.0 check is
-    cross-field with ``reward_mode`` (a profit-mode scenario never reads them), so it is
-    enforced in ``ScenarioConfig``'s collect-all validator, not here.
+    The sum-to-1.0 check is cross-field with ``reward_mode``, so it is enforced in ``ScenarioConfig``'s validator.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -117,7 +108,7 @@ class RewardWeights(BaseModel):
 
 
 class ScenarioConfig(BaseModel):
-    """ """
+    """YAML-backed, boundary-validated scenario config (the operator surface)."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -128,8 +119,7 @@ class ScenarioConfig(BaseModel):
     npc_archetypes: tuple[str, ...] = ("discounter",)
     reward_mode: Literal["profit", "weighted"] = "weighted"
     reward_weights: RewardWeights = RewardWeights()
-    # Per-region demand knobs (operator-overridable). Default = the 0.4 two-region
-    # plan (region 0 full size 4-segment, region 1 asymmetric brand-loyal-heavy).
+    # Per-region demand knobs (operator-overridable; default = the two-region 0.4 plan).
     regions: tuple[RegionSpec, ...] = (
         RegionSpec(base_regional_demand=_REGION_0_DEMAND, segment_mix=_REGION_0_MIX),
         RegionSpec(base_regional_demand=_REGION_1_DEMAND, segment_mix=_REGION_1_MIX),
@@ -143,9 +133,7 @@ class ScenarioConfig(BaseModel):
     @field_validator("npc_archetypes")
     @classmethod
     def _archetypes_known(cls, archetypes: tuple[str, ...]) -> tuple[str, ...]:
-        # Every NPC seat must name a known archetype (the same set core's SeatSpec
-        # validates against). Reported per-offending-name so an operator sees exactly
-        # which entry is wrong.
+        # Every NPC seat must name a known archetype; report each offender by name.
         unknown = [a for a in archetypes if a not in NPC_ARCHETYPES]
         if unknown:
             raise ValueError(
@@ -155,14 +143,11 @@ class ScenarioConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_boundaries(self) -> ScenarioConfig:
-        """ """
+        """Collect every boundary violation into one aggregated error."""
         errors: list[str] = []
 
-        # n_regions must fit the expansion lever's fixed capacity (schema v12: a
-        # ceiling, not an equality — pydantic's own Field(le=N_REGIONS_MAX) above
-        # already rejects > N_REGIONS_MAX, this call is the defensive analog of
-        # validate_automation_width's construction-time check) AND must equal the
-        # number of region specs supplied.
+        # n_regions must fit the expansion lever's capacity and match the number of
+        # region specs supplied.
         try:
             validate_expansion_capacity(self.n_regions)
         except ValueError as exc:
@@ -173,8 +158,7 @@ class ScenarioConfig(BaseModel):
                 f"({len(self.regions)})"
             )
 
-        # Weighted reward weights must sum to 1.0 (a profit-mode scenario never reads
-        # them, so only enforce when weighted).
+        # Weighted reward weights must sum to 1.0 (profit mode never reads them).
         if self.reward_mode == "weighted":
             total = self.reward_weights.total()
             if abs(total - 1.0) > 1e-9:
@@ -185,8 +169,7 @@ class ScenarioConfig(BaseModel):
         if self.n_learning_agents < 1:
             errors.append("n_learning_agents must be >= 1 (at least one learning seat)")
 
-        # Starting cash must cover the expansion capex, or the expansion lever is dead
-        # (the same invariant World construction enforces).
+        # Starting cash must cover the expansion capex, or the expansion lever is dead.
         if STARTING_CASH < self.expansion_capex:
             errors.append(
                 f"STARTING_CASH ({STARTING_CASH}) must be >= expansion_capex "
@@ -201,18 +184,14 @@ class ScenarioConfig(BaseModel):
     def seat_plan(self) -> tuple[SeatSpec, ...]:
         """Build the seat plan: ``n_learning_agents`` learners then the NPC seats.
 
-        Seat 0 is always a learning seat (``AGENT_INDEX = 0`` for the Gym view).
-        Presence is left ``None`` so ``world.reset``'s seat-kind defaults apply (learner
-        in region 0, NPC in every region). Phase 6.0: a region no seat is ever present
-        in (e.g. an all-learning scenario with ``n_regions`` > 1 and no NPC) is now a
-        legal, if uncontested, empty region rather than a rejected boundary case.
+        Seat 0 is always a learning seat. Presence stays ``None`` so ``world.reset``'s seat-kind defaults apply (learner in region 0, NPC in every region); a region no seat is present in is a legal, uncontested, empty region.
         """
         learners = tuple(SeatSpec(is_npc=False) for _ in range(self.n_learning_agents))
         npcs = tuple(SeatSpec(is_npc=True, archetype=name) for name in self.npc_archetypes)
         return learners + npcs
 
     def competition_segments(self) -> dict[str, SegmentParams]:
-        """ """
+        """The default segments with the price-sensitive ``beta_reference`` raised for competition."""
         segments = default_segments()
         price_sensitive = segments[PRICE_SENSITIVE]
         segments[PRICE_SENSITIVE] = replace(
@@ -221,7 +200,7 @@ class ScenarioConfig(BaseModel):
         return segments
 
     def to_core_config(self) -> CoreConfig:
-        """ """
+        """Map onto the framework-free ``CoreConfig``."""
         demand = DemandConfig(
             base_regional_demand=self.regions[0].base_regional_demand,
             price_elasticity=self.price_elasticity,
@@ -251,18 +230,12 @@ class ScenarioConfig(BaseModel):
 
     @classmethod
     def default(cls) -> ScenarioConfig:
-        """The competition default: weighted reward, 2 learning agents, 0.4 economics.
-
-        All other fields take their class defaults (a single discounter NPC, the
-        two-region 0.4 demand plan, the 0.4 cost/expansion knobs), so
-        ``default().to_core_config()`` reproduces the accepted 0.4 economics with the
-        0.5 weighted reward selected.
-        """
+        """The competition default: weighted reward, 2 learning agents, the 0.4 economics."""
         return cls(name="competition-default")
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> ScenarioConfig:
-        """ """
+        """Parse the YAML file and build the scenario (an empty file means all defaults)."""
         text = Path(path).read_text()
         data = yaml.safe_load(text)
         if data is None:
