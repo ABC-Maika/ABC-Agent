@@ -32,11 +32,11 @@ from typing import (
 
 import numpy as np
 
-from retail_simulator.harness.geo_archetypes import (
+from retail_simulator.envs.geo_archetypes import (
     GEO_ARCHETYPE_LABELS,
     geo_archetypes as _geo_archetypes,
 )
-from retail_simulator.harness.spike_archetypes import (
+from retail_simulator.envs.spike_archetypes import (
     AGGRESSOR,
     LEAN,
     PATIENT,
@@ -45,7 +45,7 @@ from retail_simulator.harness.spike_archetypes import (
 
 if TYPE_CHECKING:  # type-only; never pulled in at runtime import time
     from retail_simulator.core.config import CoreConfig, RegionConfig
-    from retail_simulator.harness.curriculum import ScenarioDistribution
+    from retail_simulator.envs.curriculum import ScenarioDistribution
 
 logger = logging.getLogger(__name__)
 
@@ -340,7 +340,7 @@ class FrozenPolicyPool:
             from dataclasses import replace  # noqa: PLC0415
 
             from retail_simulator.core.config import CoreConfig  # noqa: PLC0415
-            from retail_simulator.harness.arena import (  # noqa: PLC0415
+            from retail_simulator.envs.arena import (  # noqa: PLC0415
                 arena_region_table_hash as _arena_region_table_hash,
             )
 
@@ -1447,8 +1447,8 @@ def run_league_training(
     import supersuit as ss
 
     from retail_simulator.envs.parallel_env import RetailParallelEnv
-    from retail_simulator.harness.curriculum import CurriculumEnvWrapper
-    from retail_simulator.harness.parallel_gate import (
+    from retail_simulator.envs.curriculum import CurriculumEnvWrapper
+    from retail_simulator.envs.parallel_gate import (
         _make_curve_callback,
         _make_shared_ppo,
         competition_config,
@@ -1497,7 +1497,7 @@ def run_league_training(
     # lock amendment), plus writeoff_frac_max for the same future-proofing
     # reason. They are read straight off the effective config.
     if home_regions is not None:
-        from retail_simulator.harness.arena import (
+        from retail_simulator.envs.arena import (
             arena_region_table_hash as _arena_region_table_hash,
         )
 
@@ -1802,8 +1802,8 @@ def _head_to_head_episode_scores(
     component_sink: dict[str, dict[str, float]] | None = None,
 ) -> dict[str, float]:
     """ """
-    from retail_simulator.harness.learnability import DEFAULT_MAX_EPISODE_STEPS
-    from retail_simulator.harness.parallel_gate import (
+    from retail_simulator.envs.learnability import DEFAULT_MAX_EPISODE_STEPS
+    from retail_simulator.envs.parallel_gate import (
         _components_from_info,
         weighted_objective,
     )
@@ -1951,8 +1951,8 @@ def evaluate_pool_snapshot_improvement(
     # Lazy import: RetailParallelEnv pulls pettingzoo, which this module
     # otherwise avoids until call time.
     from retail_simulator.envs.parallel_env import RetailParallelEnv
-    from retail_simulator.harness.learnability import GATE_SIGMA_MULTIPLE
-    from retail_simulator.harness.parallel_gate import competition_config
+    from retail_simulator.envs.learnability import GATE_SIGMA_MULTIPLE
+    from retail_simulator.envs.parallel_gate import competition_config
 
     checkpoints = training_result.checkpoints
     if len(checkpoints) < 2:
@@ -2072,8 +2072,8 @@ def _run_round_end_evaluation(
     """ """
     # Lazy imports: RetailParallelEnv pulls pettingzoo, kept out of module load.
     from retail_simulator.envs.parallel_env import RetailParallelEnv
-    from retail_simulator.harness.learnability import DEFAULT_MAX_EPISODE_STEPS
-    from retail_simulator.harness.parallel_gate import (
+    from retail_simulator.envs.learnability import DEFAULT_MAX_EPISODE_STEPS
+    from retail_simulator.envs.parallel_gate import (
         _components_from_info,
         competition_config,
         weighted_objective,
@@ -2190,7 +2190,7 @@ class RealPpoGeneralizationDiagnostic:
 
 def _default_holdout_scenarios() -> tuple[CoreConfig, ...]:
     """ """
-    from retail_simulator.harness.curriculum import (
+    from retail_simulator.envs.curriculum import (
         _VARIANT_B_REGION_0_MIX,
         _VARIANT_B_REGION_1_MIX,
         _VARIANT_C_REGION_0_MIX,
@@ -2256,8 +2256,8 @@ def run_real_ppo_generalization_diagnostic(
         )
 
     # Lazy heavy imports keep module import cheap.
-    from retail_simulator.harness.curriculum import evaluate_generalization
-    from retail_simulator.harness.parallel_gate import (
+    from retail_simulator.envs.curriculum import evaluate_generalization
+    from retail_simulator.envs.parallel_gate import (
         _make_shared_ppo,
         build_parallel_vec_env,
         competition_config,

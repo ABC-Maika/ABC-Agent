@@ -37,17 +37,17 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from retail_simulator.core.config import CoreConfig
-    from retail_simulator.harness.ladder import LadderResult
+    from retail_simulator.envs.ladder import LadderResult
     from retail_simulator.live import SeriesResult, ServeConfig, ServeResult
 
 # Module-load import: Typer resolves Option defaults at function-definition time.
 # The league module is lazy w.r.t. SB3/SuperSuit (this does not pull [train]).
-from retail_simulator.harness.league import DEFAULT_LEAGUE_NAME
+from retail_simulator.envs.league import DEFAULT_LEAGUE_NAME
 
 # Module-load import (same def-time constraint as above): feeds `league
 # ladder`'s `--participants` help text from the real allowlist. `harness.ladder`
 # imports no envs/SB3, so this is cheap.
-from retail_simulator.harness.ladder import LADDER_ARCHETYPE_LABELS
+from retail_simulator.envs.ladder import LADDER_ARCHETYPE_LABELS
 
 # Global state populated by the root callback and read by subcommands.
 _state: dict[str, Any] = {"seed": 42, "quiet": False, "verbose": False, "run_dir": Path("runs")}
@@ -198,7 +198,7 @@ def sweep(
     seeds: int = typer.Option(3, "--seeds", help="Number of seeds to average over."),
 ) -> None:
     """Run the analytical pricing sweep; write the report + CSVs under ``runs/``."""
-    from retail_simulator.harness.sweep import (
+    from retail_simulator.envs.sweep import (
         assortment_axis_csv_rows,
         automation_axis_csv_rows,
         expansion_timing_csv_rows,
@@ -282,7 +282,7 @@ def learnability_check(
     ),
 ) -> None:
     """Run the single-agent learnability gate; print the margin + PASS/FAIL."""
-    from retail_simulator.harness.learnability import (
+    from retail_simulator.envs.learnability import (
         FULL_TOTAL_STEPS,
         QUICK_TOTAL_STEPS,
         run_gate,
@@ -333,8 +333,8 @@ def validate(
     scenario: Path = typer.Argument(..., help="Path to the scenario YAML to validate."),
 ) -> None:
     """Load + validate a scenario YAML; print its operator-facing summary."""
-    from retail_simulator.scenarios import ScenarioConfig
-    from retail_simulator.scenarios.loader import ScenarioValidationError, load_scenario
+    from retail_simulator.app import ScenarioConfig
+    from retail_simulator.app.loader import ScenarioValidationError, load_scenario
 
     try:
         core_config = load_scenario(scenario)
@@ -379,7 +379,7 @@ def calibrate(
     ticks: int = typer.Option(104, "--ticks", help="Scoring horizon per rollout (~2 years)."),
 ) -> None:
     """Measure each NPC archetype's beat-random margin over several seeds."""
-    from retail_simulator.harness.calibrate import calibrate_all
+    from retail_simulator.envs.calibrate import calibrate_all
 
     seed_tuple = tuple(range(_state["seed"], _state["seed"] + seeds))
     _log.info("calibrating NPC archetypes: %d seeds x %d ticks on the fast seam", seeds, ticks)
@@ -668,12 +668,12 @@ def play_human(
 ) -> None:
     """Play a hot-seat game in the terminal and append a debrief record."""
     # Lazy import: keeps the env/pettingzoo stack out of CLI module import.
-    from retail_simulator.harness.hotseat import (
+    from retail_simulator.envs.hotseat import (
         append_debrief,
         play_hotseat_game,
         print_rps_primer,
     )
-    from retail_simulator.harness.spike import calibrated_spike_config
+    from retail_simulator.envs.spike import calibrated_spike_config
 
     if ticks < 1:
         _echo(_status("FAIL", f"--ticks must be >= 1, got {ticks}", "red"))
@@ -761,12 +761,12 @@ def _scenario_seat_plan(scenario: Path | None) -> tuple[int, str]:
     learning agents, weighted reward).
     """
     if scenario is None:
-        from retail_simulator.harness.parallel_gate import DEFAULT_N_LEARNING_AGENTS
+        from retail_simulator.envs.parallel_gate import DEFAULT_N_LEARNING_AGENTS
 
         return DEFAULT_N_LEARNING_AGENTS, "weighted"
 
-    from retail_simulator.scenarios import ScenarioConfig
-    from retail_simulator.scenarios.loader import load_scenario
+    from retail_simulator.app import ScenarioConfig
+    from retail_simulator.app.loader import load_scenario
 
     load_scenario(scenario)  # validate at the boundary (raises ScenarioValidationError)
     surface = ScenarioConfig.from_yaml(scenario)
@@ -828,13 +828,13 @@ def competition_run(
     ),
 ) -> None:
     """Run the multi-agent competition gate; write the report + per-agent metrics."""
-    from retail_simulator.harness.curriculum import (
+    from retail_simulator.envs.curriculum import (
         ScenarioDistribution,
         build_curriculum,
         known_curricula,
     )
-    from retail_simulator.harness.learnability import FULL_TOTAL_STEPS, QUICK_TOTAL_STEPS
-    from retail_simulator.harness.parallel_gate import diversity_report, run_parallel_gate
+    from retail_simulator.envs.learnability import FULL_TOTAL_STEPS, QUICK_TOTAL_STEPS
+    from retail_simulator.envs.parallel_gate import diversity_report, run_parallel_gate
 
     n_learning_agents, reward_mode = _scenario_seat_plan(scenario)
     if policy_kind not in ("mlp", "lstm"):
@@ -1197,12 +1197,12 @@ def league_train(
     ),
 ) -> None:
     """Train rounds of PPO against a growing opponent pool; write the pool + a JSON result."""
-    from retail_simulator.harness.curriculum import (
+    from retail_simulator.envs.curriculum import (
         ScenarioDistribution,
         build_curriculum,
         known_curricula,
     )
-    from retail_simulator.harness.league import (
+    from retail_simulator.envs.league import (
         FrozenPolicyPool,
         OpponentDistribution,
         PFSPOpponentDistribution,
@@ -1371,8 +1371,8 @@ def league_evaluate(
     ),
 ) -> None:
     """Evaluate a trained pool's round-1 vs final-round improvement; print a JSON report."""
-    from retail_simulator.harness.arena import arena_lock_config
-    from retail_simulator.harness.league import (
+    from retail_simulator.envs.arena import arena_lock_config
+    from retail_simulator.envs.league import (
         FrozenPolicyPool,
         LeagueTrainingResult,
         evaluate_pool_snapshot_improvement,
@@ -1459,11 +1459,11 @@ def league_generalization(
     ),
 ) -> None:
     """Compare a curriculum-trained PPO against a fixed-policy baseline on held-out scenarios."""
-    from retail_simulator.harness.curriculum import (
+    from retail_simulator.envs.curriculum import (
         build_curriculum,
         known_curricula,
     )
-    from retail_simulator.harness.league import (
+    from retail_simulator.envs.league import (
         default_holdout_scenarios,
         run_real_ppo_generalization_diagnostic,
     )
@@ -1508,7 +1508,7 @@ def _split_participant_label(spec: str) -> tuple[str, str | None]:
     Returns ``(raw, explicit_label)``; ``explicit_label`` is ``None`` when the
     caller supplied none (the spec's own ``default_label`` applies).
     """
-    from retail_simulator.harness.ladder import (  # noqa: PLC0415
+    from retail_simulator.envs.ladder import (  # noqa: PLC0415
         ARCHETYPE_SPEC_PREFIX,
         RANDOM_SPEC_PREFIX,
     )
@@ -1620,15 +1620,15 @@ def _format_ladder_table(result: "LadderResult") -> str:
 def _ladder_env_default() -> tuple[CoreConfig | None, str]:
     """The ``default`` ``--env`` value: no config override — ``run_ladder`` falls
     back to its own ``competition_config()`` default."""
-    from retail_simulator.harness.ladder import DEFAULT_ENV_LABEL  # noqa: PLC0415
+    from retail_simulator.envs.ladder import DEFAULT_ENV_LABEL  # noqa: PLC0415
 
     return None, DEFAULT_ENV_LABEL
 
 
 def _ladder_env_calibrated() -> tuple[CoreConfig | None, str]:
     """The ``calibrated`` ``--env`` value: ``calibrated_spike_config()``."""
-    from retail_simulator.harness.ladder import CALIBRATED_ENV_LABEL  # noqa: PLC0415
-    from retail_simulator.harness.spike import calibrated_spike_config  # noqa: PLC0415
+    from retail_simulator.envs.ladder import CALIBRATED_ENV_LABEL  # noqa: PLC0415
+    from retail_simulator.envs.spike import calibrated_spike_config  # noqa: PLC0415
 
     return calibrated_spike_config(), CALIBRATED_ENV_LABEL
 
@@ -1639,7 +1639,7 @@ def _ladder_env_arena() -> tuple[CoreConfig | None, str]:
     Returns only the ``(config, config_label)`` pair; the two-seat arena seating
     is resolved separately in :func:`league_ladder`.
     """
-    from retail_simulator.harness.arena import ARENA_ENV_LABEL, arena_lock_config  # noqa: PLC0415
+    from retail_simulator.envs.arena import ARENA_ENV_LABEL, arena_lock_config  # noqa: PLC0415
 
     return arena_lock_config(), ARENA_ENV_LABEL
 
@@ -1650,7 +1650,7 @@ def _ladder_env_arena_balanced() -> tuple[CoreConfig | None, str]:
 
     Seating is resolved separately in :func:`league_ladder`, like ``arena``.
     """
-    from retail_simulator.harness.arena import (  # noqa: PLC0415
+    from retail_simulator.envs.arena import (  # noqa: PLC0415
         ARENA_BALANCED_ENV_LABEL,
         arena_balanced_config,
     )
@@ -1745,8 +1745,8 @@ def league_ladder(
     ),
 ) -> None:
     """Run a head-to-head ladder over the given participants; write ladder.json and print the report."""
-    from retail_simulator.harness.arena import arena_home_regions
-    from retail_simulator.harness.ladder import parse_participant_spec, run_ladder
+    from retail_simulator.envs.arena import arena_home_regions
+    from retail_simulator.envs.ladder import parse_participant_spec, run_ladder
 
     # -- Boundary validation: --env ------------------------------------------------------
     try:

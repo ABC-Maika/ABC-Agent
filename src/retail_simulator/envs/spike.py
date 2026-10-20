@@ -17,8 +17,8 @@ from typing import Any
 import numpy as np
 
 from retail_simulator.core.config import CoreConfig, SupplierConfig, WageConfig, WarehouseConfig
-from retail_simulator.harness.ladder import _bootstrap_margin_ci
-from retail_simulator.harness.spike_archetypes import (
+from retail_simulator.envs.ladder import _bootstrap_margin_ci
+from retail_simulator.envs.spike_archetypes import (
     AGGRESSOR,
     LEAN,
     PATIENT,
@@ -296,7 +296,7 @@ def _default_head_to_head(
     caller pass extras like ``home_regions``. The closure's ``close`` attribute releases
     the shared env; it is ``None`` when ``env_factory`` is given. Heavy imports stay lazy.
     """
-    from retail_simulator.harness.league import (  # noqa: PLC0415
+    from retail_simulator.envs.league import (  # noqa: PLC0415
         _position_controlled_head_to_head,
     )
 

@@ -1,6 +1,6 @@
 """Four CLOSED-LOOP geographic archetypes stressing the arena's geography axis (S5).
 
-Only the ``expansion`` target is closed-loop; every other lever is a fixed per-archetype constant borrowed from :mod:`retail_simulator.harness.spike_archetypes`'s vetted anchors. Region 0 (the arena's deliberately stranded slot) is never a candidate in any rule — every scan starts at region 1.
+Only the ``expansion`` target is closed-loop; every other lever is a fixed per-archetype constant borrowed from :mod:`retail_simulator.envs.spike_archetypes`'s vetted anchors. Region 0 (the arena's deliberately stranded slot) is never a candidate in any rule — every scan starts at region 1.
 
 Layer note: pure ``core`` reads only (encoding/schema/config) — no envs, no RL framework, no network.
 """

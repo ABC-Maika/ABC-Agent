@@ -22,7 +22,7 @@ from retail_simulator.core.state import (
     SegmentParams,
     default_segments,
 )
-from retail_simulator.harness.sweep import (
+from retail_simulator.envs.sweep import (
     automation_gate_config,
     automation_verdict_for_timing,
     run_sweep,
@@ -516,7 +516,7 @@ def _evaluate_policy_in_config(
     seed: int,
 ) -> float:
     """Mean stationary episode score of a policy in one scenario config."""
-    from retail_simulator.harness.parallel_gate import _episode_stationary_score
+    from retail_simulator.envs.parallel_gate import _episode_stationary_score
 
     # Lazy import: the parallel env pulls pettingzoo (a 1.5+s import).
     from retail_simulator.envs.parallel_env import RetailParallelEnv

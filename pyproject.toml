@@ -18,20 +18,20 @@ rl = [
     "gymnasium>=0.29,<1.1",
     "pettingzoo>=1.24,<1.25",
 ]
-# Training/harness only — never imported by core/ or envs/. supersuit is the
-# Phase 0.5 SuperSuit↔SB3 parameter-sharing bridge (the PettingZoo Parallel env ->
+# Training (the arena tooling in envs/) only — never imported by core/. supersuit is the
+# SuperSuit↔SB3 parameter-sharing bridge (the PettingZoo Parallel env ->
 # one shared self-play policy); it pins cleanly against the locked pettingzoo 1.24
 # + sb3 2.x ranges (verified: supersuit 3.10 with pettingzoo 1.24.3 + sb3 2.8).
 train = [
     "stable-baselines3>=2.3,<3.0",
     "supersuit>=3.9,<4.0",
 ]
-# CLI (`retail-sim`) — Typer app in the harness tier; not imported by core/envs/.
+# CLI (`retail-sim`) — Typer app in the `app` tier; not imported by core/envs/.
 cli = [
     "typer>=0.12",
 ]
-# Scenario config surface (`scenarios/`) — YAML → ScenarioConfig → CoreConfig. Only
-# `scenarios` (and the CLI/harness that consume it) import these; never core/envs.
+# Scenario config surface (`app/` models+loader) — YAML → ScenarioConfig → CoreConfig.
+# Only the scenario models/loader (and the CLI that consumes them) import these; never core/envs.
 scenarios = [
     "pydantic>=2.0,<3.0",
     "pyyaml>=6.0",
@@ -81,7 +81,7 @@ __root__ = "retail_simulator.envs:register_env"
 # CLI entry point (Wave 5). `retail-sim` -> the Typer app in cli.py. Requires the
 # `[cli]` extra (typer); the harness tier may import gymnasium/sb3.
 [project.scripts]
-retail-sim = "retail_simulator.cli:app"
+retail-sim = "retail_simulator.app.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -173,13 +173,12 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
-name = "scenarios imports only core"
+name = "app scenario models import only core"
 type = "forbidden"
-source_modules = ["retail_simulator.scenarios"]
+source_modules = ["retail_simulator.app.models", "retail_simulator.app.loader"]
 forbidden_modules = [
+    "retail_simulator.app.cli",
     "retail_simulator.envs",
-    "retail_simulator.harness",
-    "retail_simulator.cli",
     "gymnasium",
     "pettingzoo",
     "stable_baselines3",
@@ -187,11 +186,11 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
-name = "harness does not import cli/network"
+name = "envs does not import cli/network"
 type = "forbidden"
-source_modules = ["retail_simulator.harness"]
+source_modules = ["retail_simulator.envs"]
 forbidden_modules = [
-    "retail_simulator.cli",
+    "retail_simulator.app.cli",
     "ray",
     "socket",
     "requests",
@@ -202,8 +201,7 @@ name = "live does not import cli / training / network primitives outside websock
 type = "forbidden"
 source_modules = ["retail_simulator.live"]
 forbidden_modules = [
-    "retail_simulator.cli",
-    "retail_simulator.harness",
+    "retail_simulator.app.cli",
     "stable_baselines3",
     "supersuit",
     "ray",

@@ -1,6 +1,6 @@
 """The SuperSuit<->SB3 bridge + the multi-agent self-play learnability gate.
 
-Layer note: ``harness -> {envs, core, stable_baselines3, supersuit, gymnasium, pettingzoo}``; importing these here is allowed (forbidden only under ``core/``). The heavy RL imports (supersuit, sb3) are done LAZILY inside the functions so ``import retail_simulator.harness`` stays cheap and does not hard-require ``[train]``.
+Layer note: ``harness -> {envs, core, stable_baselines3, supersuit, gymnasium, pettingzoo}``; importing these here is allowed (forbidden only under ``core/``). The heavy RL imports (supersuit, sb3) are done LAZILY inside the functions so ``import retail_simulator.envs`` stays cheap and does not hard-require ``[train]``.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import numpy.typing as npt
 
 from retail_simulator.core.config import CoreConfig, RewardConfig
 from retail_simulator.core.reward import RewardComponents, weighted_objective
-from retail_simulator.harness.learnability import (
+from retail_simulator.envs.learnability import (
     DEFAULT_EVAL_EPISODES,
     DEFAULT_MAX_EPISODE_STEPS,
     FULL_TOTAL_STEPS,
@@ -21,7 +21,7 @@ from retail_simulator.harness.learnability import (
     GateReport,
     _curve_trends_up,
 )
-from retail_simulator.harness.sweep import (
+from retail_simulator.envs.sweep import (
     RESEARCH_OPPONENT_ARCHETYPE,
     automation_gate_config,
     loyalty_gate_config,
@@ -31,7 +31,7 @@ from retail_simulator.harness.sweep import (
 
 if TYPE_CHECKING:  # type-only; never pulled in at runtime import time
     from retail_simulator.envs.parallel_env import RetailParallelEnv
-    from retail_simulator.harness.curriculum import ScenarioDistribution
+    from retail_simulator.envs.curriculum import ScenarioDistribution
 
 _RESEARCH_LEVER_NAME: str = "research"
 
@@ -89,13 +89,13 @@ def build_parallel_vec_env(
     base_config = config if config is not None else competition_config()
     penv: Any
     if curriculum is not None:
-        # Lazy import — keeps ``import retail_simulator.harness.parallel_gate``
+        # Lazy import — keeps ``import retail_simulator.envs.parallel_gate``
         # cheap (CurriculumEnvWrapper pulls envs.parallel_env which pulls
         # pettingzoo). The wrapper's surface mirrors RetailParallelEnv enough for
         # SuperSuit's MarkovVectorEnv (possible_agents, observation_space(agent),
         # action_space(agent), reset(seed, options), step, agents, metadata,
         # unwrapped.render_mode).
-        from retail_simulator.harness.curriculum import CurriculumEnvWrapper
+        from retail_simulator.envs.curriculum import CurriculumEnvWrapper
 
         penv = CurriculumEnvWrapper(
             curriculum,

@@ -24,8 +24,8 @@ from typing import Any, Literal, NamedTuple
 import numpy as np
 
 from retail_simulator.core.config import CoreConfig
-from retail_simulator.harness.geo_archetypes import GEO_ARCHETYPE_LABELS, geo_archetypes
-from retail_simulator.harness.spike_archetypes import (
+from retail_simulator.envs.geo_archetypes import GEO_ARCHETYPE_LABELS, geo_archetypes
+from retail_simulator.envs.spike_archetypes import (
     AGGRESSOR,
     LEAN,
     PATIENT,
@@ -339,7 +339,7 @@ def _materialize_predicts(
     checkpoint loads once rather than per (pair, seed).
     """
     # Lazy import: keep module load cheap and sb3-free.
-    from retail_simulator.harness.league import (  # noqa: PLC0415
+    from retail_simulator.envs.league import (  # noqa: PLC0415
         FrozenPolicyPool,
         PoolMember,
     )
@@ -426,10 +426,10 @@ def _default_pairwise_per_seed(
     """
     # Lazy imports: keep module load cheap and sb3-free.
     from retail_simulator.envs.parallel_env import RetailParallelEnv  # noqa: PLC0415
-    from retail_simulator.harness.league import (  # noqa: PLC0415
+    from retail_simulator.envs.league import (  # noqa: PLC0415
         _position_controlled_head_to_head,
     )
-    from retail_simulator.harness.parallel_gate import competition_config  # noqa: PLC0415
+    from retail_simulator.envs.parallel_gate import competition_config  # noqa: PLC0415
 
     effective_config = config if config is not None else competition_config()
 
@@ -538,7 +538,7 @@ def _build_tournament_summary(
     beats/CI facts (no bootstrap re-run). kind_by_label counts the decisive
     triples touching a "checkpoint" participant.
     """
-    from retail_simulator.harness.spike import (  # noqa: PLC0415
+    from retail_simulator.envs.spike import (  # noqa: PLC0415
         PairMargin,
         _measure_tournament,
         _triple_cycles,
@@ -664,7 +664,7 @@ def run_ladder(
         # env differs, and full equality (not just length) also catches a
         # same-length coincidence. One check catches both mismatch directions.
         # Lazy import: harness.spike pulls the same heavy rollout stack as league.
-        from retail_simulator.harness.spike import calibrated_spike_config  # noqa: PLC0415
+        from retail_simulator.envs.spike import calibrated_spike_config  # noqa: PLC0415
 
         is_calibrated_shaped = config.demand.regions == calibrated_spike_config().demand.regions
         labeled_calibrated = config_label == CALIBRATED_ENV_LABEL
@@ -680,7 +680,7 @@ def run_ladder(
     if home_regions is not None:
         # Fail fast, before any rollout (mirrors the config/config_label checks
         # above); lazy import keeps this out of module-load time.
-        from retail_simulator.harness.parallel_gate import competition_config  # noqa: PLC0415
+        from retail_simulator.envs.parallel_gate import competition_config  # noqa: PLC0415
 
         effective_n_regions = len(
             (config if config is not None else competition_config()).demand.regions

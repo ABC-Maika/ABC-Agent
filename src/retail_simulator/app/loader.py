@@ -10,7 +10,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from retail_simulator.core.config import CoreConfig
-from retail_simulator.scenarios.models import ScenarioConfig
+from retail_simulator.app.models import ScenarioConfig
 
 
 class ScenarioValidationError(ValueError):

@@ -1,4 +1,4 @@
-"""Turn a running :class:`~retail_simulator.harness.arena_match.ArenaMatch` into an ``arena-match-v1`` record.
+"""Turn a running :class:`~retail_simulator.envs.arena_match.ArenaMatch` into an ``arena-match-v1`` record.
 
 ``score_total`` / ``revenue_total`` / ``profit_total`` run from round 1; ``profit_window`` and ``opened_regions`` cover only ``(round - snapshot_every, round]``, the animation step a player actually watches.
 """
@@ -9,8 +9,8 @@ from collections.abc import Sequence
 from typing import Any
 
 from retail_simulator.core.config import CoreConfig
-from retail_simulator.harness.arena import ARENA_REGION_CLASSES
-from retail_simulator.harness.arena_match import LOGGED_LEVERS, ArenaSeatSpec, RoundResult
+from retail_simulator.envs.arena import ARENA_REGION_CLASSES
+from retail_simulator.envs.arena_match import LOGGED_LEVERS, ArenaSeatSpec, RoundResult
 
 SCHEMA: str = "arena-match-v1"
 

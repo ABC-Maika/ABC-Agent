@@ -2,7 +2,7 @@
 
 PASS requires BOTH: ``ppo_mean >= random_mean + 2 * random_std`` AND a non-degenerate learning curve (final window mean > initial window mean). A JSON report is written for provenance; a learning-curve PNG is saved only if ``matplotlib`` is importable (best-effort, never a hard dependency).
 
-Layer note: ``harness -> envs -> core``; importing ``gymnasium`` / ``stable-baselines3`` here is allowed (forbidden only under ``core/``). Heavy RL imports are lazy, so ``import retail_simulator.harness`` stays cheap.
+Layer note: ``harness -> envs -> core``; importing ``gymnasium`` / ``stable-baselines3`` here is allowed (forbidden only under ``core/``). Heavy RL imports are lazy, so ``import retail_simulator.envs`` stays cheap.
 """
 
 from __future__ import annotations

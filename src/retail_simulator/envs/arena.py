@@ -1,6 +1,6 @@
 """The named 25-region arena ``CoreConfig``, composed on the calibrated 2-region point.
 
-Public names are prefixed ``arena_`` (not ``competition_*``) to avoid colliding with the established :func:`~retail_simulator.harness.parallel_gate.competition_config`.
+Public names are prefixed ``arena_`` (not ``competition_*``) to avoid colliding with the established :func:`~retail_simulator.envs.parallel_gate.competition_config`.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from retail_simulator.core.state import (
     PRICE_SENSITIVE,
     QUALITY_SEEKING,
 )
-from retail_simulator.harness.spike import calibrated_spike_config
+from retail_simulator.envs.spike import calibrated_spike_config
 
 if TYPE_CHECKING:  # type-only; never pulled in at runtime import time
     from retail_simulator.envs.parallel_env import RetailParallelEnv

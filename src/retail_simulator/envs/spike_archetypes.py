@@ -1,6 +1,6 @@
 """Open-loop league archetypes (``aggressor`` / ``lean`` / ``patient``).
 
-Each ``make_*`` returns a ``predict(obs, *, episode_start=False) -> np.ndarray`` closure matching the contract :func:`retail_simulator.harness.league._head_to_head_episode_scores` drives. The action is encoded ONCE per ``make_*`` call and the same read-only array is returned on every call — deterministic across calls and ticks. Pure ``core`` reads only (encoding/schema).
+Each ``make_*`` returns a ``predict(obs, *, episode_start=False) -> np.ndarray`` closure matching the contract :func:`retail_simulator.envs.league._head_to_head_episode_scores` drives. The action is encoded ONCE per ``make_*`` call and the same read-only array is returned on every call — deterministic across calls and ticks. Pure ``core`` reads only (encoding/schema).
 """
 
 from __future__ import annotations

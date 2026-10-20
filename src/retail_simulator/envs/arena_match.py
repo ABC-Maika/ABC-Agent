@@ -20,7 +20,7 @@ from retail_simulator.core.state import WorldState
 from retail_simulator.core.world import compute_expansion_mask
 from retail_simulator.envs.action_wrapper import mask_expansion_logits
 from retail_simulator.envs.parallel_env import RetailParallelEnv
-from retail_simulator.harness.arena import (
+from retail_simulator.envs.arena import (
     ARENA_BALANCED_ENV_LABEL,
     ARENA_ENV_LABEL,
     arena_balanced_config,
@@ -28,8 +28,8 @@ from retail_simulator.harness.arena import (
     arena_home_regions,
     arena_lock_config,
 )
-from retail_simulator.harness.geo_archetypes import GEO_ARCHETYPE_LABELS, geo_archetypes
-from retail_simulator.harness.ladder import _materialize_predicts
+from retail_simulator.envs.geo_archetypes import GEO_ARCHETYPE_LABELS, geo_archetypes
+from retail_simulator.envs.ladder import _materialize_predicts
 
 # The levers every consumer records, in the order the study's CSV writes them;
 # re-exported by scripts/arena_competition.py so its CLI contract is unchanged.
@@ -236,7 +236,7 @@ def _validate_seats(seats: Sequence[ArenaSeatSpec]) -> None:
 class ArenaMatch:
     """One unbroken arena match over a continuing world, advanced one round per ``step()``.
 
-    Construction seats the field, materializes every policy and resets the world with ``seed``; nothing is lazy afterwards. ``homes`` defaults to :func:`~retail_simulator.harness.arena.arena_home_regions` (one distinct METRO home per seat).
+    Construction seats the field, materializes every policy and resets the world with ``seed``; nothing is lazy afterwards. ``homes`` defaults to :func:`~retail_simulator.envs.arena.arena_home_regions` (one distinct METRO home per seat).
     """
 
     def __init__(

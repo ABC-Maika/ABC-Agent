@@ -583,8 +583,8 @@ def play_hotseat_game(
     """
     from retail_simulator.core.reward import weighted_objective
     from retail_simulator.envs.parallel_env import RetailParallelEnv
-    from retail_simulator.harness.parallel_gate import _components_from_info
-    from retail_simulator.harness.spike_archetypes import calibrated_archetypes
+    from retail_simulator.envs.parallel_gate import _components_from_info
+    from retail_simulator.envs.spike_archetypes import calibrated_archetypes
 
     chosen_archetype = archetype if archetype is not None else _pick_hidden_archetype(seed)
     if chosen_archetype not in PLAYSTYLES:

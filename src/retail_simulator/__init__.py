@@ -16,7 +16,7 @@ __all__ = ["RetailEnv", "RetailParallelEnv", "ScenarioConfig", "__version__"]
 
 if TYPE_CHECKING:  # import only for type-checkers; never at runtime import time
     from retail_simulator.envs import RetailEnv, RetailParallelEnv
-    from retail_simulator.scenarios import ScenarioConfig
+    from retail_simulator.app import ScenarioConfig
 
 
 def register_environments() -> bool:
@@ -40,7 +40,7 @@ def __getattr__(name: str) -> Any:
 
         return RetailParallelEnv
     if name == "ScenarioConfig":
-        from retail_simulator.scenarios import ScenarioConfig
+        from retail_simulator.app import ScenarioConfig
 
         return ScenarioConfig
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
