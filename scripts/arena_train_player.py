@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 import sys
 from collections.abc import Sequence
 from dataclasses import replace
@@ -22,6 +21,7 @@ from retail_simulator.envs.arena import (
     arena_lock_config,
     arena_region_table_hash,
 )
+from retail_simulator.logging_setup import configure_logging
 
 WORLDS: tuple[str, ...] = ("lock", "balanced")
 REWARDS: tuple[str, ...] = ("profit", "weighted")
@@ -237,9 +237,7 @@ def _load_driver() -> ModuleType:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-    )
+    configure_logging()
     parser = _build_parser()
     args = parser.parse_args(argv)
     try:

@@ -107,7 +107,9 @@ def run_parallel_gate(
         curriculum_seed=curriculum_seed,
     )
     curve: list[tuple[int, float]] = []
-    callback = _make_curve_callback(curve)
+    callback = _make_curve_callback(
+        curve, log_every=max(total_steps // 20, 1), label="parallel gate"
+    )
     model = _make_shared_ppo(vec, seed=seed, policy_kind=policy_kind)
     model.learn(total_timesteps=total_steps, callback=callback, progress_bar=False)
     vec.close()

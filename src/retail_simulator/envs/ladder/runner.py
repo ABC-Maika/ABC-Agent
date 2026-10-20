@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Sequence
 from math import sqrt
 
 import numpy as np
+
+_log = logging.getLogger(__name__)
 
 from retail_simulator.core.config import CoreConfig
 
@@ -151,6 +154,15 @@ def run_ladder(
 
     # Every unordered pair in (label_a < label_b) order — stable regardless of input ordering.
     sorted_labels = sorted(labels)
+    n_pairs = len(sorted_labels) * (len(sorted_labels) - 1) // 2
+    _log.info(
+        "ladder starting: %d participant(s), %d pair(s) over %d seed(s) x %d episode(s) [%s]",
+        len(labels),
+        n_pairs,
+        n_seeds,
+        n_episodes,
+        config_label,
+    )
 
     # Gather each pair's per-seed margins. The default path materializes every
     # participant once and reuses predicts across all pairs/seeds; the injected
@@ -186,13 +198,23 @@ def run_ladder(
     pair_mean: dict[tuple[str, str], float] = {}
     pair_margin_se: dict[tuple[str, str], float] = {}
     pair_per_seed: dict[tuple[str, str], np.ndarray] = {}
+    pair_index = 0
     for i, label_a in enumerate(sorted_labels):
         for label_b in sorted_labels[i + 1 :]:
+            pair_index += 1
             per_seed = per_seed_by_pair[(label_a, label_b)]
             per_seed_arr = np.asarray(per_seed, dtype=np.float64)
             mean_margin = float(per_seed_arr.mean())
             # Population sd / sqrt(n_seeds): the standard error under the fixed-seed-set contract.
             margin_se = float(np.std(per_seed_arr, ddof=0)) / sqrt(n_seeds)
+            _log.info(
+                "ladder pair %d/%d: %s vs %s — mean margin %+.2f",
+                pair_index,
+                n_pairs,
+                label_a,
+                label_b,
+                mean_margin,
+            )
             pair_mean[(label_a, label_b)] = mean_margin
             pair_margin_se[(label_a, label_b)] = margin_se
             pair_per_seed[(label_a, label_b)] = per_seed_arr
@@ -316,6 +338,11 @@ def run_ladder(
                 component_field_margins=component_field_margins,
             )
         )
+
+    ladder_order = ", ".join(
+        f"{label} ({field_margin_by_label[label]:+.2f})" for label in ranked_labels
+    )
+    _log.info("ladder done — ranking: %s", ladder_order)
 
     kendall_tau_split_half = _split_half_kendall_tau(sorted_labels, pair_per_seed, n_seeds=n_seeds)
     # The tournament summary is always computed from this ladder's own score

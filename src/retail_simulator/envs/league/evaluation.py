@@ -7,13 +7,18 @@ curriculum-PPO vs fixed-PPO on held-out scenarios. Heavy imports stay lazy.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from retail_simulator.logging_setup import human_steps
+
 from .winrate import WinRateEntry
+
+_log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # type-only; never pulled in at runtime import time
     from retail_simulator.core.config import CoreConfig
@@ -514,6 +519,7 @@ def run_real_ppo_generalization_diagnostic(
     # Lazy heavy imports keep module import cheap.
     from retail_simulator.envs.curriculum import evaluate_generalization
     from retail_simulator.envs.parallel_gate import (
+        _make_curve_callback,
         _make_shared_ppo,
         build_parallel_vec_env,
         competition_config,
@@ -531,9 +537,23 @@ def run_real_ppo_generalization_diagnostic(
         curriculum=curriculum,
         curriculum_seed=curriculum_seed,
     )
+    _log.info(
+        "generalization diagnostic: training curriculum-PPO for %s steps",
+        human_steps(train_steps),
+    )
     try:
         curriculum_model = _make_shared_ppo(vec_curric, seed=core_seed)
-        curriculum_model.learn(total_timesteps=train_steps, progress_bar=False)
+        curriculum_curve: list[tuple[int, float]] = []
+        curriculum_model.learn(
+            total_timesteps=train_steps,
+            callback=_make_curve_callback(
+                curriculum_curve,
+                log_every=max(train_steps // 20, 1),
+                label="curriculum PPO",
+                logger=_log,
+            ),
+            progress_bar=False,
+        )
     finally:
         vec_curric.close()
 
@@ -544,9 +564,23 @@ def run_real_ppo_generalization_diagnostic(
         n_learning_agents=n_learning_agents,
         seed=core_seed,
     )
+    _log.info(
+        "generalization diagnostic: training fixed-PPO for %s steps",
+        human_steps(train_steps),
+    )
     try:
         fixed_model = _make_shared_ppo(vec_fixed, seed=core_seed)
-        fixed_model.learn(total_timesteps=train_steps, progress_bar=False)
+        fixed_curve: list[tuple[int, float]] = []
+        fixed_model.learn(
+            total_timesteps=train_steps,
+            callback=_make_curve_callback(
+                fixed_curve,
+                log_every=max(train_steps // 20, 1),
+                label="fixed PPO",
+                logger=_log,
+            ),
+            progress_bar=False,
+        )
     finally:
         vec_fixed.close()
 

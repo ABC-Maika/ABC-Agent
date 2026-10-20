@@ -30,6 +30,7 @@ from phase4.training import DEFAULT_ENT_COEF, DEFAULT_GAE_LAMBDA, DEFAULT_PFSP_M
 
 from retail_simulator.core.config import CoreConfig
 from retail_simulator.envs.spike import calibrated_spike_config
+from retail_simulator.logging_setup import configure_logging
 
 REPO = Path(__file__).resolve().parent.parent
 RUNS_ROOT = REPO / "runs" / "phase4_rl_confirm"
@@ -553,9 +554,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-    )
+    configure_logging()
     args = _build_parser().parse_args(argv)
     return run(args)
 

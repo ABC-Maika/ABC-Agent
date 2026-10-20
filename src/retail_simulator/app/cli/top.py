@@ -294,7 +294,14 @@ def train(
         train_env = env
     _log.info("training PPO for %d steps (%d env(s)) -> %s", total_steps, n_envs, run_dir)
     model = PPO("MlpPolicy", train_env, seed=_state["seed"], verbose=1 if _state["verbose"] else 0)
-    model.learn(total_timesteps=total_steps, progress_bar=False)
+    # Lazy import: keeps the SB3 parallel-gate module out of CLI startup.
+    from retail_simulator.envs.parallel_gate.bridge import _make_curve_callback
+
+    curve: list[tuple[int, float]] = []
+    callback = _make_curve_callback(
+        curve, log_every=max(total_steps // 20, 1), label="train", logger=_log
+    )
+    model.learn(total_timesteps=total_steps, callback=callback, progress_bar=False)
     if train_env is not env:
         train_env.close()
     model.save(str(run_dir / "policy.zip"))

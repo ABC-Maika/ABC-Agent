@@ -4,6 +4,7 @@ non-transitivity metrics, and summary/reporting.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from itertools import combinations
 from math import sqrt
@@ -16,6 +17,8 @@ from phase4.training import _materialize
 from retail_simulator.core.config import CoreConfig
 from retail_simulator.envs.ladder import _bootstrap_margin_ci
 from retail_simulator.envs.spike import PairMargin, _measure_tournament, calibrated_spike_config
+
+_log = logging.getLogger("tournament")
 
 # Fixed fact about the mechanism, always present in the summary (never a per-run value):
 # --mask-expansion scopes to the learner's TRAINING rollouts only and never reaches any
@@ -55,9 +58,23 @@ def tournament(
     env = RetailParallelEnv(
         effective_config, n_learning_agents=2, seed=seed_set[0], home_regions=home_regions
     )
+    n_pairs = len(list(combinations(labels, 2)))
+    _log.info(
+        "tournament starting: %d pair(s) over %d seed(s) x %d episode(s)",
+        n_pairs,
+        n_seeds,
+        n_episodes,
+    )
     per_seed_by_pair: dict[tuple[str, str], list[float]] = {}
     try:
-        for label_a, label_b in combinations(labels, 2):
+        for pair_index, (label_a, label_b) in enumerate(combinations(labels, 2), start=1):
+            _log.info(
+                "tournament pair %d/%d: %s vs %s",
+                pair_index,
+                n_pairs,
+                label_a,
+                label_b,
+            )
             per_seed: list[float] = []
             for seed in seed_set:
                 scores_a, scores_b = _position_controlled_head_to_head(
@@ -70,6 +87,14 @@ def tournament(
                 )
                 per_seed.append(float(np.mean(scores_a)) - float(np.mean(scores_b)))
             per_seed_by_pair[(label_a, label_b)] = per_seed
+            _log.info(
+                "tournament pair %d/%d: %s vs %s — mean margin %+.2f",
+                pair_index,
+                n_pairs,
+                label_a,
+                label_b,
+                float(np.mean(per_seed)),
+            )
     finally:
         env.close()
 

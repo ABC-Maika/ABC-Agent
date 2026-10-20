@@ -9,11 +9,15 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+
+from retail_simulator.logging_setup import human_steps
 
 if TYPE_CHECKING:  # type-only imports; never pulled in at runtime import time
     import gymnasium as gym
@@ -217,7 +221,9 @@ def run_gate(
     else:
         train_env = Monitor(gym.make(ENV_ID, max_episode_steps=max_episode_steps))
     curve: list[tuple[int, float]] = []
-    callback = _make_curve_callback(curve)
+    callback = _make_curve_callback(
+        curve, log_every=max(total_steps // 20, 1), label="learnability gate", logger=_log
+    )
 
     model = PPO("MlpPolicy", train_env, seed=seed, verbose=1 if progress else 0)
     model.learn(total_timesteps=total_steps, callback=callback, progress_bar=False)
@@ -277,28 +283,95 @@ def build_report(
     )
 
 
-def _make_curve_callback(sink: list[tuple[int, float]]) -> Any:
+def _make_curve_callback(
+    sink: list[tuple[int, float]],
+    *,
+    log_every: int | None = None,
+    label: str | None = None,
+    logger: logging.Logger | None = None,
+) -> Any:
     """Build an SB3 callback that records rolling mean episode reward.
 
-    ``BaseCallback`` is imported lazily (only available with the ``[train]`` extra). At each rollout end the callback appends ``(timestep, mean_reward)`` to ``sink`` from the ``Monitor``-tracked episode buffer.
+    ``BaseCallback`` is imported lazily (only available with the ``[train]`` extra). At each rollout end the callback appends ``(timestep, mean_reward)`` to ``sink`` from the ``Monitor``-tracked episode buffer. With ``log_every`` set, it also emits a progress line every ``log_every`` timesteps so a long ``model.learn`` never runs silently in the terminal.
     """
+    from stable_baselines3.common import base_class
     from stable_baselines3.common.callbacks import BaseCallback
 
     class _CurveCallback(BaseCallback):
-        def __init__(self, curve_sink: list[tuple[int, float]]) -> None:
+        def __init__(
+            self,
+            curve_sink: list[tuple[int, float]],
+            *,
+            log_every: int | None,
+            label: str | None,
+            logger: logging.Logger | None = None,
+        ) -> None:
             super().__init__()
             self._sink = curve_sink
+            self._log_every = log_every
+            self._label = label
+            self._logger = logger if logger is not None else _log
+            self._next_log_at = log_every
+            # The model is bound later by SB3 in init_callback(); capture the start
+            # there so the first progress line has a real rate.
+            self._start_time = time.monotonic()
+            self._start_steps = 0
+            self._last_log_time: float | None = None
+            self._last_log_steps: int = 0
+
+        def init_callback(self, model: base_class.BaseAlgorithm) -> None:
+            super().init_callback(model)
+            self._start_time = time.monotonic()
+            self._start_steps = int(model.num_timesteps)
 
         def _on_rollout_end(self) -> None:
             buffer = getattr(self.model, "ep_info_buffer", None)
-            if buffer:
-                mean_reward = float(np.mean([ep["r"] for ep in buffer if "r" in ep]))
-                self._sink.append((int(self.num_timesteps), mean_reward))
+            rewards = [float(ep["r"]) for ep in buffer or [] if "r" in ep]
+            if rewards:
+                self._sink.append((int(self.num_timesteps), float(np.mean(rewards))))
+            if not (self._log_every and self._next_log_at is not None):
+                return
+            if int(self.num_timesteps) < self._next_log_at:
+                return
+            total = int(self.locals.get("total_timesteps", 0) or self.model.num_timesteps or 0)
+            # A rollout runs to the episode's end, so the counter can overshoot the
+            # target; clamp the display so progress never reads past 100%.
+            done = int(self.num_timesteps) if total <= 0 else min(int(self.num_timesteps), total)
+            prefix = f"{self._label}: " if self._label else ""
+            # Rate since the previous log line, or since training start for the first one.
+            now = time.monotonic()
+            base_time = self._last_log_time if self._last_log_time is not None else self._start_time
+            base_steps = (
+                self._last_log_steps if self._last_log_time is not None else self._start_steps
+            )
+            elapsed = now - base_time
+            sps = (int(self.num_timesteps) - base_steps) / elapsed if elapsed > 0 else 0.0
+            self._last_log_time = now
+            self._last_log_steps = int(self.num_timesteps)
+            last = self._sink[-1][1] if self._sink else None
+            if last is None or math.isnan(last):
+                self._logger.info(
+                    "%straining %s/%s steps · %.1f sps",
+                    prefix,
+                    human_steps(done),
+                    human_steps(total),
+                    sps,
+                )
+            else:
+                self._logger.info(
+                    "%straining %s/%s steps · ep_reward %+.1f · %.1f sps",
+                    prefix,
+                    human_steps(done),
+                    human_steps(total),
+                    last,
+                    sps,
+                )
+            self._next_log_at += self._log_every
 
         def _on_step(self) -> bool:
             return True
 
-    return _CurveCallback(sink)
+    return _CurveCallback(sink, log_every=log_every, label=label, logger=logger)
 
 
 def _write_report(report: GateReport, report_path: Path, *, save_plot: bool) -> None:

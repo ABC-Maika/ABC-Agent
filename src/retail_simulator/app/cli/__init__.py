@@ -26,6 +26,7 @@ from typing import Any
 import typer
 
 from retail_simulator import __version__
+from retail_simulator.logging_setup import configure_logging
 
 # Global state populated by the root callback and read by subcommands.
 _state: dict[str, Any] = {"seed": 42, "quiet": False, "verbose": False, "run_dir": Path("runs")}
@@ -93,7 +94,7 @@ def _echo(message: str) -> None:
 
 
 def _configure_logging() -> None:
-    """Attach a stderr handler at the resolved level.
+    """Attach the shared stderr console handler at the resolved level.
 
     Progress goes to stderr (stdout is reserved for results). ``--quiet`` => errors
     only; ``--verbose`` => DEBUG; default => INFO.
@@ -104,12 +105,10 @@ def _configure_logging() -> None:
         level = logging.DEBUG
     else:
         level = logging.INFO
-    handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
-    _log.handlers.clear()
-    _log.addHandler(handler)
-    _log.setLevel(level)
-    _log.propagate = False
+    configure_logging(level)
+    # A previous call in the same process (or an embedded entry point) may have
+    # flipped this off; the console handler lives on the root logger now.
+    _log.propagate = True
 
 
 def _new_run_dir(kind: str) -> Path:

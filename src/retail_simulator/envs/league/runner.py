@@ -8,11 +8,14 @@ into the win-rate matrix. Heavy imports (SB3, SuperSuit, envs) stay lazy.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
+
+from retail_simulator.logging_setup import human_steps
 
 from .evaluation import _run_round_end_evaluation
 from .training import (
@@ -83,6 +86,13 @@ def run_league_training(
         )
 
     league_seed, curriculum_seed, core_seed = seeds
+    run_started_at = time.monotonic()
+    logger.info(
+        "league training starting: %d round(s), %s steps/round, pool=%s",
+        n_rounds,
+        human_steps(train_steps_per_round),
+        initial_pool.pool_dir,
+    )
     # The effective config, computed once: reused by both the single-learner
     # env factory and the provenance hash recorded on the pool, so the two
     # can't silently diverge.
@@ -219,6 +229,7 @@ def run_league_training(
             return self.member
 
     round_zero_distribution: OpponentDistribution = _FixedMemberDistribution(first_scripted)
+    logger.info("round 0/%d: saving the random-init snapshot (no training)", n_rounds)
     round_zero_wrapper = LeagueEnvWrapper(
         wrapped_env_factory=_single_learner_wrapped_factory_guard,
         pool=initial_pool,
@@ -240,13 +251,14 @@ def run_league_training(
                 ent_coef=ent_coef,
                 gae_lambda=gae_lambda,
             )
-            initial_pool.add_checkpoint(
+            round_zero_member = initial_pool.add_checkpoint(
                 model_zero,
                 round_index=0,
                 seed=core_seed,
                 policy_kind=policy_kind,
             )
             learning_curves.append(())
+            logger.info("round 0/%d: saved %s", n_rounds, round_zero_member.member_id)
         finally:
             vec_throw.close()
     finally:
@@ -277,6 +289,17 @@ def run_league_training(
             win_rate_matrix=win_rate_matrix,
             learner_id=prior_learner_id,
         )
+        round_started_at = time.monotonic()
+        n_pool_members = len(initial_pool.members())
+        logger.info(
+            "round %d/%d: training %s steps (pool has %d member(s), league_seed=%d) · %s",
+            round_index,
+            n_rounds,
+            human_steps(train_steps_per_round),
+            n_pool_members,
+            per_round_league_seeds[round_index],
+            "warm start" if (warm_start and round_index >= 2) else "from-scratch init",
+        )
         wrapper = LeagueEnvWrapper(
             wrapped_env_factory=_single_learner_wrapped_factory_guard,
             pool=initial_pool,
@@ -292,7 +315,12 @@ def run_league_training(
             vec = _build_bridged_vec(wrapper)
             try:
                 curve: list[tuple[int, float]] = []
-                callback = _make_curve_callback(curve)
+                callback = _make_curve_callback(
+                    curve,
+                    log_every=max(train_steps_per_round // 20, 1),
+                    label=f"round {round_index}/{n_rounds}",
+                    logger=logger,
+                )
                 model = _make_shared_ppo(
                     vec,
                     seed=core_seed,
@@ -326,6 +354,12 @@ def run_league_training(
                     callback=callback,
                     progress_bar=False,
                 )
+                logger.info(
+                    "round %d/%d: training done in %.1fs",
+                    round_index,
+                    n_rounds,
+                    time.monotonic() - round_started_at,
+                )
                 round_k_member = initial_pool.add_checkpoint(
                     model,
                     round_index=round_index,
@@ -333,6 +367,18 @@ def run_league_training(
                     policy_kind=policy_kind,
                 )
                 learning_curves.append(tuple(curve))
+                checkpoint_path = (
+                    initial_pool.pool_dir / round_k_member.checkpoint_path
+                    if round_k_member.checkpoint_path is not None
+                    else None
+                )
+                logger.info(
+                    "round %d/%d: saved %s%s",
+                    round_index,
+                    n_rounds,
+                    round_k_member.member_id,
+                    f" -> {checkpoint_path}" if checkpoint_path is not None else "",
+                )
             finally:
                 vec.close()
         finally:
@@ -343,6 +389,14 @@ def run_league_training(
         # The matrix is persisted atomically after each fold so a resumed run
         # sees the cumulative record. The per-round seed offset keeps the eval
         # reproducible and distinct from the evaluator's internal offsets.
+        n_opponents = max(len(initial_pool.members()) - 1, 0)
+        logger.info(
+            "round %d/%d: round-end head-to-head vs %d opponent(s), %d episode(s) each",
+            round_index,
+            n_rounds,
+            n_opponents,
+            round_end_eval_episodes,
+        )
         round_end_results = _run_round_end_evaluation(
             initial_pool,
             round_k_member,
@@ -350,6 +404,23 @@ def run_league_training(
             config=config,
             seed=core_seed + round_index,
             home_regions=home_regions,
+        )
+        if round_end_results:
+            summary_parts = [
+                f"{opp_id} {entry.wins}/{entry.total}"
+                for opp_id, entry in sorted(round_end_results.items())
+            ]
+            logger.info(
+                "round %d/%d: eval wins — %s",
+                round_index,
+                n_rounds,
+                "  ".join(summary_parts),
+            )
+        logger.info(
+            "round %d/%d: done in %.1fs",
+            round_index,
+            n_rounds,
+            time.monotonic() - round_started_at,
         )
         for opp_id, entry in round_end_results.items():
             # record(...) adds one outcome per call; fold the per-pair
@@ -369,6 +440,13 @@ def run_league_training(
         win_rate_matrix.save(win_rate_matrix_path)
 
     checkpoints = tuple(m for m in initial_pool.members() if m.kind == "checkpoint")
+    logger.info(
+        "league training complete: %d round(s), %d checkpoint(s) in %s (%.1fs total)",
+        n_rounds,
+        len(checkpoints),
+        initial_pool.pool_dir,
+        time.monotonic() - run_started_at,
+    )
     # n_learning_agents is reserved for forward compatibility (a 2-learner
     # shared-policy variant); the current loop is single-learner only.
     del n_learning_agents

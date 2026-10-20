@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import logging
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -33,8 +34,11 @@ from retail_simulator.envs.arena_match import (
     resolve_arena_world,
 )
 from retail_simulator.envs.geo_archetypes import GEO_ARCHETYPE_LABELS
+from retail_simulator.logging_setup import configure_logging
 
 __all__ = ["LOGGED_LEVERS", "main"]
+
+_log = logging.getLogger("arena_competition")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -256,6 +260,7 @@ def _parse_players(specs: Sequence[str], parser: argparse.ArgumentParser) -> dic
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    configure_logging()
     parser = _build_parser()
     args = parser.parse_args(argv)
 
@@ -309,10 +314,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(str(exc))
     masked = match.masked_seats
 
+    _log.info(
+        "arena match starting: %s world · %d seat(s) (%d masked) · %d round(s) · seed=%d",
+        env_label,
+        n_seats,
+        len(masked),
+        args.rounds,
+        args.seed,
+    )
     rows: list[dict[str, Any]] = []
     totals = {name: {"score": 0.0, "revenue": 0.0, "profit": 0.0} for name in seat_names}
+    log_every = max(args.rounds // 10, 1)
 
-    for _ in range(args.rounds):
+    for round_index in range(args.rounds):
         result = match.step()
         for seat, seat_round in enumerate(result.seats):
             name = seat_names[seat]
@@ -339,6 +353,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 value = seat_round.levers.get(lever)
                 row[lever] = None if value is None else round(float(value), 4)
             rows.append(row)
+        if (round_index + 1) % log_every == 0 or round_index + 1 == args.rounds:
+            leader = max(seat_names, key=lambda name: totals[name]["score"])
+            _log.info(
+                "round %d/%d · leader: %s (%s score)",
+                round_index + 1,
+                args.rounds,
+                leader,
+                f"{totals[leader]['score']:,.0f}",
+            )
 
     args.csv.parent.mkdir(parents=True, exist_ok=True)
     with args.csv.open("w", newline="") as handle:
@@ -373,6 +396,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(payload, indent=2) + "\n")
+    _log.info("match done: decisions -> %s · results -> %s", args.csv, args.out)
 
     if not args.quiet:
         order = sorted(standings, key=lambda name: -standings[name]["total_score"])
