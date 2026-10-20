@@ -2,7 +2,7 @@
 
 This script is argument parsing plus CSV/JSON writing. The seating, the per-seat expansion
 masking and the "log the EFFECTIVE decision" rule are OWNED by
-:mod:`retail_simulator.harness.arena_match` (``ArenaMatch`` / ``resolve_arena_world``), which
+:mod:`retail_simulator.envs.arena_match` (``ArenaMatch`` / ``resolve_arena_world``), which
 the leaderboard generator and the live demo drive too — change a rule there, not here. A
 match needs at least two seats, so a lone ``--player``/``--npc`` is rejected.
 
@@ -24,15 +24,15 @@ from pathlib import Path
 from typing import Any
 
 from retail_simulator.core.config import CoreConfig
-from retail_simulator.harness.arena import arena_home_regions
-from retail_simulator.harness.arena_match import (
+from retail_simulator.envs.arena import arena_home_regions
+from retail_simulator.envs.arena_match import (
     LOGGED_LEVERS,
     MIN_SEATS,
     ArenaMatch,
     ArenaSeatSpec,
     resolve_arena_world,
 )
-from retail_simulator.harness.geo_archetypes import GEO_ARCHETYPE_LABELS
+from retail_simulator.envs.geo_archetypes import GEO_ARCHETYPE_LABELS
 
 __all__ = ["LOGGED_LEVERS", "main"]
 
@@ -181,7 +181,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def _resolve_world(args: argparse.Namespace) -> tuple[CoreConfig, str, dict[str, float]]:
     """Build the match's world, a label naming its base world, and the overrides applied.
 
-    A thin adapter over :func:`~retail_simulator.harness.arena_match.resolve_arena_world`,
+    A thin adapter over :func:`~retail_simulator.envs.arena_match.resolve_arena_world`,
     which owns the rule (``scripts/gen_leaderboard_artifact.py`` resolves its world through
     the same function, so the two scripts cannot drift).
     """

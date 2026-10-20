@@ -16,7 +16,7 @@ from types import ModuleType
 from typing import Any, cast
 
 from retail_simulator.core.config import CoreConfig
-from retail_simulator.harness.arena import (
+from retail_simulator.envs.arena import (
     arena_balanced_config,
     arena_home_regions,
     arena_lock_config,

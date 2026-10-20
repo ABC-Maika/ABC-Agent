@@ -26,8 +26,8 @@ from typing import Any
 import numpy as np
 
 from retail_simulator.core.config import CoreConfig
-from retail_simulator.harness.ladder import _bootstrap_margin_ci
-from retail_simulator.harness.spike import PairMargin, _measure_tournament, calibrated_spike_config
+from retail_simulator.envs.ladder import _bootstrap_margin_ci
+from retail_simulator.envs.spike import PairMargin, _measure_tournament, calibrated_spike_config
 
 REPO = Path(__file__).resolve().parent.parent
 RUNS_ROOT = REPO / "runs" / "phase4_rl_confirm"
@@ -93,7 +93,7 @@ def train_league(
     warm_start: bool = False,
 ) -> Any:
     """Train the PFSP self-play league, snapshotting one PPO checkpoint per round into ``pool_dir``."""
-    from retail_simulator.harness.league import (  # noqa: PLC0415
+    from retail_simulator.envs.league import (  # noqa: PLC0415
         POOL_SPIKE_ARCHETYPE_LABELS,
         FrozenPolicyPool,
         OpponentDistribution,
@@ -218,7 +218,7 @@ def distinct_checkpoints(pool_dir: Path, checkpoints: tuple[Any, ...]) -> dict[s
 
 def _materialize(label_to_zip: dict[str, Path]) -> dict[str, Callable[..., Any]]:
     """Load each distinct checkpoint's predict closure once (reuses the ladder loader; lazy import keeps module load cheap and SB3-free)."""
-    from retail_simulator.harness.ladder import _materialize_predicts  # noqa: PLC0415
+    from retail_simulator.envs.ladder import _materialize_predicts  # noqa: PLC0415
 
     return _materialize_predicts({label: str(path) for label, path in label_to_zip.items()})
 
@@ -237,7 +237,7 @@ def tournament(
     One shared ``RetailParallelEnv(config, n_learning_agents=2)`` reused across every (pair, seed); per-seed continuous margin ``mean(scores_a)-mean(scores_b)``; the ladder's seed-axis bootstrap CI applied CONSISTENTLY across pairs (one resample draw, reused). ``config`` defaults to :func:`calibrated_spike_config`; pass the config the checkpoints were actually trained on so the tournament rates them on that world.
     """
     from retail_simulator.envs.parallel_env import RetailParallelEnv  # noqa: PLC0415
-    from retail_simulator.harness.league import (  # noqa: PLC0415
+    from retail_simulator.envs.league import (  # noqa: PLC0415
         _position_controlled_head_to_head,
     )
 
@@ -495,7 +495,7 @@ def _load_existing_pool_state(
 
     Returns ``(checkpoints, seed_archetypes, home_regions, arena_region_table_hash, arena_lock_knobs, reward_mode)``; ``reward_mode`` is ``None`` for pools that never trained under an explicit "weighted" mode — the caller treats that like the "profit" default.
     """
-    from retail_simulator.harness.league import FrozenPolicyPool  # noqa: PLC0415
+    from retail_simulator.envs.league import FrozenPolicyPool  # noqa: PLC0415
 
     pool = FrozenPolicyPool.load(pool_dir)
     members = pool.members()
@@ -516,10 +516,10 @@ def _resolve_env(
 ) -> tuple[CoreConfig | None, tuple[int, ...] | None, str | None, dict[str, float] | None]:
     """Resolve ``--env`` into ``(config, home_regions, arena_region_table_hash, arena_lock_knobs)``.
 
-    ``"calibrated"`` (default) -> all None (train_league's own :func:`calibrated_spike_config` default, no explicit seating). ``"arena"`` -> the 25-region lock (:func:`~retail_simulator.harness.arena.arena_lock_config`); ``"arena-balanced"`` -> the same table with a working-capital credit line + smaller warehouse footprint (:func:`~retail_simulator.harness.arena.arena_balanced_config`). Both arena variants seat both seats and record the region-table hash plus the economics knobs the hash alone cannot discriminate — ``credit_limit``/``overdraft_rate`` distinguish the two variants, and they are read off the resolved config so config/homes/hash/knobs are computed once and can never diverge.
+    ``"calibrated"`` (default) -> all None (train_league's own :func:`calibrated_spike_config` default, no explicit seating). ``"arena"`` -> the 25-region lock (:func:`~retail_simulator.envs.arena.arena_lock_config`); ``"arena-balanced"`` -> the same table with a working-capital credit line + smaller warehouse footprint (:func:`~retail_simulator.envs.arena.arena_balanced_config`). Both arena variants seat both seats and record the region-table hash plus the economics knobs the hash alone cannot discriminate — ``credit_limit``/``overdraft_rate`` distinguish the two variants, and they are read off the resolved config so config/homes/hash/knobs are computed once and can never diverge.
     """
     if env in ("arena", "arena-balanced"):
-        from retail_simulator.harness.arena import (  # noqa: PLC0415
+        from retail_simulator.envs.arena import (  # noqa: PLC0415
             arena_balanced_config,
             arena_home_regions,
             arena_lock_config,
@@ -574,13 +574,13 @@ def run(args: argparse.Namespace) -> int:
     seed_archetypes: tuple[str, ...]
     if args.seed_archetypes:
         if args.env in ("arena", "arena-balanced"):
-            from retail_simulator.harness.geo_archetypes import (  # noqa: PLC0415
+            from retail_simulator.envs.geo_archetypes import (  # noqa: PLC0415
                 GEO_ARCHETYPE_LABELS,
             )
 
             seed_archetypes = GEO_ARCHETYPE_LABELS
         else:
-            from retail_simulator.harness.league import (  # noqa: PLC0415
+            from retail_simulator.envs.league import (  # noqa: PLC0415
                 POOL_SPIKE_ARCHETYPE_LABELS,
             )
 
@@ -612,7 +612,7 @@ def run(args: argparse.Namespace) -> int:
             # the lock's own knobs may move (a future lock amendment could set its cap to 300,
             # colliding with the balanced variant), but credit_limit/overdraft_rate exist only
             # on the balanced variant.
-            from retail_simulator.harness.arena import (  # noqa: PLC0415
+            from retail_simulator.envs.arena import (  # noqa: PLC0415
                 ARENA_BALANCED_CREDIT_LIMIT,
             )
 
