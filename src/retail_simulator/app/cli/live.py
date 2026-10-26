@@ -96,25 +96,25 @@ def live_serve(
     tick_interval: float = typer.Option(
         5.0,
         "--tick-interval",
-        help="Seconds per tick; 0 = CI fast mode (F5=A — no wall-clock sleep).",
+        help="Seconds per tick; 0 = CI fast mode (no wall-clock sleep).",
     ),
-    n_ticks: int = typer.Option(104, "--n-ticks", help="Game length (per)."),
+    n_ticks: int = typer.Option(104, "--n-ticks", help="Game length in ticks."),
     host: str = typer.Option("localhost", "--host", help="WebSocket bind host."),
     port: int = typer.Option(8765, "--port", help="WebSocket bind port."),
     registration_timeout: float = typer.Option(
         60.0,
         "--registration-timeout",
-        help="F4=B abort after this many seconds with insufficient clients.",
+        help="Abort after this many seconds with insufficient clients.",
     ),
     no_auth: bool = typer.Option(
         False,
         "--no-auth",
-        help="Disable shared-token auth. Token via RETAIL_SIM_TOKEN env var when set; F2=A.",
+        help="Disable shared-token auth. Token via RETAIL_SIM_TOKEN env var when set.",
     ),
     npc_archetypes: str = typer.Option(
         "",
         "--npc-archetypes",
-        help="F3=B comma-separated NPC archetypes (e.g. 'discounter,premium'); empty = all-remote.",
+        help="Comma-separated NPC archetypes (e.g. 'discounter,premium'); empty = all-remote.",
     ),
     scenario_name: str = typer.Option(
         "default", "--scenario", help="Scenario name for SeatAssigned + manifest."
@@ -293,25 +293,25 @@ def live_run_series(
     tick_interval: float = typer.Option(
         5.0,
         "--tick-interval",
-        help="Seconds per tick; 0 = CI fast mode (F5=A — no wall-clock sleep).",
+        help="Seconds per tick; 0 = CI fast mode (no wall-clock sleep).",
     ),
-    n_ticks: int = typer.Option(104, "--n-ticks", help="Game length (per)."),
+    n_ticks: int = typer.Option(104, "--n-ticks", help="Game length in ticks."),
     host: str = typer.Option("localhost", "--host", help="WebSocket bind host."),
     port: int = typer.Option(8765, "--port", help="WebSocket bind port."),
     registration_timeout: float = typer.Option(
         60.0,
         "--registration-timeout",
-        help="F4=B abort after this many seconds with insufficient clients.",
+        help="Abort after this many seconds with insufficient clients.",
     ),
     no_auth: bool = typer.Option(
         False,
         "--no-auth",
-        help="Disable shared-token auth. Token via RETAIL_SIM_TOKEN env var when set; F2=A.",
+        help="Disable shared-token auth. Token via RETAIL_SIM_TOKEN env var when set.",
     ),
     npc_archetypes: str = typer.Option(
         "",
         "--npc-archetypes",
-        help="F3=B comma-separated NPC archetypes (e.g. 'discounter,premium'); empty = all-remote.",
+        help="Comma-separated NPC archetypes (e.g. 'discounter,premium'); empty = all-remote.",
     ),
     scenario_name: str = typer.Option(
         "default", "--scenario", help="Scenario name for SeatAssigned + manifest."
@@ -487,7 +487,7 @@ def live_play(
     no_auth: bool = typer.Option(
         False,
         "--no-auth",
-        help="Connect without a token. Otherwise the token is read from RETAIL_SIM_TOKEN; F2=A.",
+        help="Connect without a token. Otherwise the token is read from RETAIL_SIM_TOKEN.",
     ),
     policy: str = typer.Option(
         "default",

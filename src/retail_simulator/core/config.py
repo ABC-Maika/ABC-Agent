@@ -318,7 +318,7 @@ class WageConfig:
     wage_coupling_coeff: float = 0.0
     # Own-share term weight; 0.0 = off.
     wage_own_share_coeff: float = 0.0
-    # MECHANIC 2: the required-wage intercept. Also the reset wage_level anchor.
+    # The required-wage intercept. Also the reset wage_level anchor.
     wage_base: float = 0.0
     # Write-off severity scale; 0.0 (with wage_coupling_coeff 0.0) = gate off, no draw.
     writeoff_severity_scale: float = 0.0
@@ -329,11 +329,11 @@ class WageConfig:
     leader_weight_exponent: float = 1.0
     # Employee-happiness EMA rate; inert at default config (required == paid == 0).
     happiness_decay: float = 0.1
-    # MECHANIC 3: the store-count threshold above which super-linear overhead bites.
+    # The store-count threshold above which super-linear overhead bites.
     overhead_threshold_stores: float = 0.0
     # Overhead coefficient; 0.0 = off (byte-identical).
     overhead_superlinear_coeff: float = 0.0
-    # MECHANIC 3: the overhead exponent (super-linear when > 1). Default 1.0.
+    # The overhead exponent (super-linear when > 1). Default 1.0.
     overhead_exponent: float = 1.0
     overhead_reference_stores: float = 1.0
     # Money scale of the wage_spend lever; 0.0 = inert (paid_wage stays wage_base).
@@ -348,7 +348,7 @@ class WageConfig:
             raise ValueError(f"credit_limit must be >= 0, got {self.credit_limit}")
         if self.overdraft_rate != 0.0 and self.credit_limit == 0.0:
             raise ValueError(
-                f"""overdraft_rate ({self.overdraft_rate}) requires a positive credit_limit (got 0.0) - with no credit line to bound the charge, overdraft_rate would price the whole deficit every tick and, with bankruptcy deferred, compound geometrically forever (section 6 decision 3)"""
+                f"""overdraft_rate ({self.overdraft_rate}) requires a positive credit_limit (got 0.0) - with no credit line to bound the charge, overdraft_rate would price the whole deficit every tick and, with bankruptcy deferred, compound geometrically forever"""
             )
         if self.restructure_after_ticks < 0:
             raise ValueError(

@@ -141,18 +141,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "--episode-ticks",
         type=int,
         default=None,
-        help="decision 8 (taken 2026-09-18): the league training-episode horizon, forwarded to the driver's own --league-max-episode-steps -> run_league_training(max_episode_steps=...); default: None (no truncation, one opponent per round, byte-identical to every prior run). Recorded in recipe.json's episode_ticks (null when unset)",
+        help="the league training-episode horizon, forwarded to the driver's own --league-max-episode-steps -> run_league_training(max_episode_steps=...); default: None (no truncation, one opponent per round, byte-identical to every prior run). Recorded in recipe.json's episode_ticks (null when unset)",
     )
     parser.add_argument(
         "--pfsp-mix-uniform",
         type=float,
         default=None,
-        help="decision 10 (taken 2026-09-19): the PFSP uniform-mixing floor, forwarded to the driver's own --pfsp-mix-uniform -> PFSPOpponentDistribution(mix_uniform=...); default: None (no floor, byte-identical to every prior run). Recorded in recipe.json's pfsp_mix_uniform (null when unset)",
+        help="the PFSP uniform-mixing floor, forwarded to the driver's own --pfsp-mix-uniform -> PFSPOpponentDistribution(mix_uniform=...); default: None (no floor, byte-identical to every prior run). Recorded in recipe.json's pfsp_mix_uniform (null when unset)",
     )
     parser.add_argument(
         "--warm-start",
         action="store_true",
-        help="owner decision 12a (taken 2026-09-19, generation 11's training lever): "
+        help="warm-start the rounds: "
         "forwarded to the driver's own --warm-start -> "
         "run_league_training(warm_start=True), which continues round k>=2 from "
         "round (k-1)'s just-trained checkpoint instead of an independent "
@@ -173,55 +173,55 @@ def _build_parser() -> argparse.ArgumentParser:
         "--overhead-reference-stores",
         type=float,
         default=None,
-        help="wage.overhead_reference_stores (K-arm-overhead-5, re-tuned by the v4 promotion-combo re-tune); default: inherit the world's own value (7.15 for --world lock, 4.5 for --world balanced); pass 7.15 to reproduce a balanced-world recipe recorded before 2026-09-17, or 5.0 to reproduce one recorded under before this re-tune",
+        help="wage.overhead_reference_stores; default: inherit the world's own value (7.15 for --world lock, 4.5 for --world balanced)",
     )
     parser.add_argument(
         "--restructure-after-ticks",
         type=int,
         default=None,
-        help="wage.restructure_after_ticks (Phase 4 MECHANIC 4, RESTRUCTURING -- the zombie-seat recovery path, decision 7); default: inherit the world's own value (0, inert, for --world lock; 50, armed, for --world balanced since 2026-09-18); pass 0 to reproduce a balanced-world recipe recorded before that date",
+        help="wage.restructure_after_ticks (RESTRUCTURING -- the insolvent-seat recovery path); default: inherit the world's own value (0, inert, for --world lock; 50, armed, for --world balanced); pass 0 to turn the rule off",
     )
     parser.add_argument(
         "--restructure-keep-stores",
         type=int,
         default=None,
-        help="wage.restructure_keep_stores; default: inherit the world's own value (1 for --world lock, 3 for --world balanced since 2026-09-18)",
+        help="wage.restructure_keep_stores; default: inherit the world's own value (1 for --world lock, 3 for --world balanced)",
     )
     parser.add_argument(
         "--max-share-per-region",
         type=float,
         default=None,
-        help="demand.max_share_per_region (Phase 4 MECHANIC 5, REGIONAL SHARE CEILING — decision 9); default: inherit the world's own value (1.0 for --world lock; 0.6 for --world balanced since 2026-09-19); pass 1.0 to reproduce a balanced-world recipe recorded before that date -- this knob is NOT match/eval-only, it changes the world the recipe TRAINS in",
+        help="demand.max_share_per_region (REGIONAL SHARE CEILING); default: inherit the world's own value (1.0 for --world lock; 0.6 for --world balanced); pass 1.0 to turn the ceiling off -- this knob is NOT match/eval-only, it changes the world the recipe TRAINS in",
     )
     parser.add_argument(
         "--marketing-cost-exponent",
         type=float,
         default=None,
-        help="marketing.marketing_cost_exponent (MECHANIC 6 candidate, CONVEX MARKETING COST — a dueling experiment); default: inherit the world's own value (1.0, linear/off, for both --world lock and --world balanced -- NOT armed by this task). NOT match/eval-only, like --max-share-per-region: changes the world the recipe TRAINS in, so a policy must be RETRAINED at a value > 1.0 to reveal a new, interior spend optimum",
+        help="marketing.marketing_cost_exponent (CONVEX MARKETING COST); default: inherit the world's own value (1.0, linear/off, for both --world lock and --world balanced). NOT match/eval-only, like --max-share-per-region: changes the world the recipe TRAINS in, so a policy must be RETRAINED at a value > 1.0 to reveal a new, interior spend optimum",
     )
     parser.add_argument(
         "--promotion-contest-weight",
         type=float,
         default=None,
-        help="promotion.promotion_contest_weight (MECHANIC-6b candidate, PROMOTION CONTEST — a dueling experiment); default: inherit the world's own value (0.0, absolute/off, for --world lock; 1.0, armed, for --world balanced since K-arm-v4-promotion-combo); pass 0.0 to reproduce a balanced-world recipe recorded before that. NOT match/eval-only, like --marketing-cost-exponent: changes the world the recipe TRAINS in, so a policy must be RETRAINED at a value > 0.0 to reveal the new, reactive equilibrium",
+        help="promotion.promotion_contest_weight (PROMOTION CONTEST); default: inherit the world's own value (0.0, absolute/off, for --world lock; 1.0, armed, for --world balanced); pass 0.0 to turn the contest off. NOT match/eval-only, like --marketing-cost-exponent: changes the world the recipe TRAINS in, so a policy must be RETRAINED at a value > 0.0 to reveal the new, reactive equilibrium",
     )
     parser.add_argument(
         "--promo-cost-per-unit",
         type=float,
         default=None,
-        help="promotion.promo_cost_per_unit (promotion combo #2b); default: inherit the world's own value (0.009, the class default, for --world lock; 0.0, armed, for --world balanced since K-arm-v4-promotion-combo); pass 0.009 to reproduce a balanced-world recipe recorded before that",
+        help="promotion.promo_cost_per_unit; default: inherit the world's own value (0.009, the class default, for --world lock; 0.0, armed, for --world balanced); pass 0.009 to restore the class default",
     )
     parser.add_argument(
         "--stockpile-build",
         type=float,
         default=None,
-        help="promotion.stockpile_build (promotion combo #2b); default: inherit the world's own value (0.17, the class default, for --world lock; 0.0, armed, for --world balanced since K-arm-v4-promotion-combo); pass 0.17 to reproduce a balanced-world recipe recorded before that",
+        help="promotion.stockpile_build; default: inherit the world's own value (0.17, the class default, for --world lock; 0.0, armed, for --world balanced); pass 0.17 to restore the class default",
     )
     parser.add_argument(
         "--stockpile-decay",
         type=float,
         default=None,
-        help="promotion.stockpile_decay (promotion combo #2b); default: inherit the world's own value (0.7, the class default, for both --world lock and --world balanced -- NOT armed by this task)",
+        help="promotion.stockpile_decay; default: inherit the world's own value (0.7, the class default, for both --world lock and --world balanced)",
     )
     parser.add_argument("--pool-root", type=Path, default=_DEFAULT_POOL_ROOT)
     return parser
