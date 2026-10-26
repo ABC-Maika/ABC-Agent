@@ -6,9 +6,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        Submit **one** trained checkpoint. Attach your Stable-Baselines3 `.zip`
-        (produced by `model.save(...)`) by dragging it into the **Checkpoint** field
-        below. See the README for how the entry is trained, self-checked, and scored.
+        Submit **one** trained checkpoint. Attach your Stable-Baselines3 or sb3-contrib
+        `.zip` (produced by `model.save(...)`) by dragging it into the **Checkpoint**
+        field below. See the README for how the entry is trained, self-checked, and scored.
         Final scoring is run by the organizer on undisclosed seeds and home rotations.
   - type: input
     id: team
@@ -29,12 +29,19 @@ body:
     attributes:
       label: Policy kind
       description: >-
-        Which of the two loadable kinds this zip is. The tooling tries to auto-detect,
-        but falls back to ppo-mlp without failing when it cannot read the zip — so your
-        declaration is what makes a silent demotion visible.
+        The algorithm and policy this zip was trained with. The tooling auto-detects it
+        and loads the zip accordingly, but falls back to ppo-mlp without failing when it
+        cannot read the zip. That only goes unnoticed for a recurrent-ppo-lstm entry,
+        which would then play without its recurrent state — so your declaration is what
+        makes the demotion visible.
       options:
         - ppo-mlp
+        - a2c-mlp
         - recurrent-ppo-lstm
+        - sac
+        - td3
+        - ddpg
+        - tqc
     validations:
       required: true
   - type: input
@@ -66,7 +73,7 @@ body:
     id: checkpoint
     attributes:
       label: Checkpoint
-      description: Drag-and-drop your Stable-Baselines3 .zip checkpoint here to attach it.
+      description: Drag-and-drop your Stable-Baselines3 or sb3-contrib .zip checkpoint here to attach it.
       placeholder: Attach your model .zip here (the same one you self-checked).
     validations:
       required: true
@@ -78,7 +85,7 @@ body:
       options:
         - label: The zip loads and plays a full 1,000-round match against the NPC field without erroring (I ran the self-check).
           required: true
-        - label: I declared the correct policy kind above (the auto-detect is silent — a wrong declaration loads a RecurrentPPO entry stateless).
+        - label: I declared the correct policy kind above (the auto-detect is silent — a recurrent entry detected as feedforward plays without its recurrent state).
           required: true
         - label: The policy's predict reads nothing but the observation — no network calls, no file reads at decision time.
           required: true

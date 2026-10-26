@@ -59,7 +59,28 @@ python scripts/arena_competition.py --balanced --rounds 1000 \
 
 Open an entry at
 https://github.com/pencho-dobrev/retail-simulator-arena/issues/new with your
-Stable-Baselines3 `.zip` checkpoint and an `entry.json`.
+checkpoint and an `entry.json`. The checkpoint is a standard Stable-Baselines3 or
+sb3-contrib `.zip` written by `model.save(...)`, from one of these algorithms:
+
+| Algorithm | Policy | Library |
+| --- | --- | --- |
+| PPO, A2C | `MlpPolicy` | stable-baselines3 |
+| RecurrentPPO | `MlpLstmPolicy` (stateful) | sb3-contrib |
+| SAC, TD3, DDPG | `MlpPolicy` | stable-baselines3 |
+| TQC | `MlpPolicy` | sb3-contrib |
+
+The tooling detects the algorithm from the zip. A RecurrentPPO policy keeps its
+recurrent state across the whole match.
+
+The observation is a fixed 318-dimensional vector and the action a 44-dimensional
+continuous vector, so `CnnPolicy` and `MultiInputPolicy` do not apply, and neither do
+discrete-only algorithms such as DQN.
+
+Two things hold for every algorithm:
+
+- Scoring always predicts deterministically, whatever the policy was trained with.
+- `VecNormalize` statistics are stored outside the zip and are not applied at scoring,
+  so a policy trained with normalization must bake it into the network or not use it.
 
 ## Rules
 
