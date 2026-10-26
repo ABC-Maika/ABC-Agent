@@ -1,18 +1,16 @@
-"""Phase 2.1 Slice 4 — the reusable play-one-game coroutine.
+"""The reusable play-one-game coroutine + seat-permutation helpers.
 
-This module owns the single client play loop that Slice 3 inlined in the
-``live play`` CLI command: connect a :class:`LiveClient`, submit the passive
-default-policy action every observed tick, capture the end-of-game
-:class:`FinalScores`, and close. BOTH callers now share it:
+Owns the single client play loop: connect a :class:`LiveClient`, submit the
+passive default-policy action every observed tick, capture the end-of-game
+:class:`FinalScores`, and close. Shared by the ``live play`` CLI command and
+the self-play ``serve_fn``. Presentation (printing, exit codes) stays in
+the CLI; this module only drives the client and returns the scores.
 
-  * ``live play`` (``cli.py``) — one operator client against a running game;
-  * the Slice 4 ``--self-play`` ``serve_fn`` — ``cfg.n_agents`` internal clients
-    driven concurrently with their own in-process ``serve_game`` server, so a
-    multi-game ``run-series`` runs hands-free with no external clients.
-
-DRY: the play loop has exactly ONE owner (this coroutine). ``cli.py`` keeps the
-operator-facing concerns (printing the seat assignment + final scores, exit
-codes); :func:`play_one_game` only drives the client and RETURNS the scores.
+Also holds the seat permutation applied to the parallel action buffer before
+it reaches the world: the parallel layout lists seats 0..n-1 while the
+world's seat order is shuffled, so each row must be routed to the matching
+region. ``permute_actions_by_seat`` is a pure numpy function with no
+server dependencies.
 """
 
 from __future__ import annotations
@@ -21,7 +19,9 @@ from collections.abc import Callable
 from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 
+from retail_simulator.core.encoding import flatten_action_space_layout
 from retail_simulator.live.client import LiveClient
 from retail_simulator.live.protocol import REGISTRY_DEFAULT_ACTION, FinalScores, SeatAssigned
 
@@ -36,30 +36,13 @@ async def play_one_game(
 ) -> FinalScores | None:
     """Connect one :class:`LiveClient`, play a whole game, return its scores.
 
-    Constructs a :class:`LiveClient`, :meth:`~LiveClient.connect`\\ s, then plays
-    the ``policy`` action each observed tick until the server broadcasts
-    FinalScores (which terminates :meth:`~LiveClient.iter_observations`), and
-    returns :attr:`LiveClient.final_scores` (``None`` if the socket closed
-    without an end-of-game frame — an aborted game). The client is ALWAYS
-    closed in a ``finally`` so a caller error does not leak the socket.
+    Returns ``None`` if the socket closed without an end-of-game frame (an
+    aborted game). The client is always closed in a ``finally``.
 
-    The ``default`` policy is obs-independent: a fresh WRITABLE float32 copy
-    (shape matching the current action schema's flat width) of the read-only
-    :data:`REGISTRY_DEFAULT_ACTION` singleton,
-    matching :meth:`~LiveClient.submit_action`'s shape/dtype contract (the
-    passive baseline; the env outcome is still seed-dependent, so across a
-    seed-varying series it yields cross-seed variance data). ``policy`` values
-    other than ``"default"`` raise :class:`ValueError` — a stochastic / learned
-    policy is deferred (same reason as Slice 3).
-
-    Note that this returns the scores rather than printing them: the operator
-    presentation (seat assignment, JSON scores, exit codes) lives in the
-    ``live play`` CLI command, while the self-play ``serve_fn`` discards the
-    return value (it reads the SERVER's :class:`ServeResult`, not the client's).
-    The optional ``on_seat_assigned`` callback fires once, right after the
-    server assigns the seat and BEFORE the first action — the seam ``live play``
-    uses to print the human-readable seat assignment at the original timing
-    without this coroutine taking on presentation concerns.
+    The ``default`` policy is obs-independent: a fresh writable float32 copy of
+    :data:`REGISTRY_DEFAULT_ACTION` each tick. Other ``policy`` values raise
+    :class:`ValueError` (a learned policy is deferred). The optional
+    ``on_seat_assigned`` callback fires once, right after seat assignment.
     """
     if policy != "default":
         raise ValueError(f"unknown policy {policy!r}; only 'default' is supported in this slice")
@@ -77,14 +60,65 @@ async def play_one_game(
 
 
 def _default_action() -> np.ndarray[Any, Any]:
-    """A fresh WRITABLE float32 copy of the registry-default action.
-
-    Shape matches the current action schema's flat width (derived from
-    ``flatten_action_space_layout``, never a hardcoded literal).
-
-    The default policy submits a fresh copy each tick rather than the shared
-    read-only singleton: ``submit_action`` does not mutate the array, but a
-    writable copy keeps the action decoupled from the global and matches the
-    contract Slice 3's ``live play`` established.
-    """
+    """A fresh writable float32 copy of the registry-default action (decoupled from the shared read-only singleton)."""
     return np.array(REGISTRY_DEFAULT_ACTION, dtype=np.float32, copy=True)
+
+
+# Derived from the current action schema's flat layout, not hardcoded.
+# Actions are validated at the boundary so a malformed entry surfaces here,
+# not deep inside ``env.step``.
+_EXPECTED_ACTION_SHAPE: tuple[int, ...] = (flatten_action_space_layout().total_dim,)
+_EXPECTED_ACTION_DTYPE: np.dtype[np.float32] = np.dtype(np.float32)
+
+
+def _validate_action(seat: int, action: npt.NDArray[np.float32]) -> None:
+    """Validate an action's shape + dtype; raise ``ValueError`` with the seat index."""
+    if action.shape != _EXPECTED_ACTION_SHAPE:
+        raise ValueError(
+            f"seat {seat}: action has shape {action.shape}, expected {_EXPECTED_ACTION_SHAPE}"
+        )
+    if action.dtype != _EXPECTED_ACTION_DTYPE:
+        raise ValueError(
+            f"seat {seat}: action has dtype {action.dtype}, expected {_EXPECTED_ACTION_DTYPE}"
+        )
+
+
+def permute_actions_by_seat(
+    arrived: dict[int, npt.NDArray[np.float32]],
+    last_valid: dict[int, npt.NDArray[np.float32]],
+    n_seats: int,
+    registry_default_action: npt.NDArray[np.float32],
+) -> tuple[dict[str, npt.NDArray[np.float32]], list[int]]:
+    """Assemble the joint action keyed by agent id for every seat.
+
+    Per-seat fallback: ``arrived`` → ``last_valid`` → a copy of
+    ``registry_default_action``. Returns the joint action plus the seats
+    that used a fallback.
+    """
+    if n_seats < 1:
+        raise ValueError(f"n_seats must be >= 1, got {n_seats}")
+
+    # Validate every action landing in the joint action against the current
+    # schema. The registry default is shape/dtype-correct by construction
+    # (built via ``encode_action``), so it is not revalidated.
+    for seat, action in arrived.items():
+        _validate_action(seat, action)
+    for seat, action in last_valid.items():
+        _validate_action(seat, action)
+
+    joint_action: dict[str, npt.NDArray[np.float32]] = {}
+    missing_seats: list[int] = []
+
+    for seat in range(n_seats):
+        agent_id = f"retailer_{seat}"
+        if seat in arrived:
+            joint_action[agent_id] = arrived[seat]
+        elif seat in last_valid:
+            joint_action[agent_id] = last_valid[seat]
+            missing_seats.append(seat)
+        else:
+            # Copy the shared registry default so a downstream writer cannot corrupt it.
+            joint_action[agent_id] = registry_default_action.copy()
+            missing_seats.append(seat)
+
+    return joint_action, missing_seats

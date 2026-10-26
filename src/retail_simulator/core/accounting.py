@@ -1,36 +1,7 @@
-"""Accounting engine: revenue / COGS / opex / profit / cash (HOT PATH).
+"""Accounting engine: revenue, COGS, opex, profit, and cash.
 
-Turns the units sold by :func:`demand.resolve_demand` into per-retailer financial
-outcomes and the next cash position, plus the loyalty-stock update. This is
-**draw #3** of the per-tick order (no accounting noise in Phase 0.0, so no RNG is
-drawn here yet — the RNG is intentionally not a parameter).
-
-Economic conventions (Phase 0.0, documented so Wave 3+ can rely on them):
-
-**This module is a PURE LEDGER — it never decides affordability (CLAMP-T2).** It
-charges EXACTLY the spend it is handed. Under ``cash_budget_enabled`` the
-affordability decision is made one layer up, in ``World.step``, BEFORE demand
-resolves: ``core/affordability.py`` computes one clamp per retailer from the
-start-of-tick cash and scales the LEVERS, so the value demand reads and the value
-billed here are the same number. Two consequences are load-bearing:
-
-* **profit is non-increasing in the start-of-tick cash.** Nothing here reads ``cash``
-  to size a cost (only the ``overdraft_rate`` line, which is *larger* the more
-  negative cash is, and the final cash identity). The pre-CLAMP-T2 in-accounting
-  clamp DID: ``clamp = cash / discretionary`` had no lower bound, so a negative start
-  cash flipped the whole discretionary block into INCOME and a broke retailer booked
-  last tick's shortfall as this tick's profit.
-* **capex is never scaled.** It is charged in full, as gated: the expansion/automation
-  masks already checked affordability against the start-of-tick cash, and a one-shot
-  purchase is not a quantity you can buy a fraction of ("the seam applies the GATE,
-  accounting does the ARITHMETIC").
-
-Loyalty stock updates PER REGION as ``L[R,K] = alpha * loyalty_per_region +
-(1 - alpha) * shares`` (broadcast over regions) — a retailer absent from a region
-has 0 share there, so its loyalty in that region decays toward 0 (a moat you do not
-defend erodes). It is state/obs only in Slice A (loyalty inert in demand).
-
-Pure and framework-free: numpy only. Does not mutate ``state``.
+Turns the units sold by demand.resolve_demand into per-retailer financial outcomes, the next
+cash position, and the per-region loyalty update. Pure ledger; never mutates state.
 """
 
 from __future__ import annotations
@@ -44,22 +15,20 @@ from retail_simulator.core.config import CoreConfig
 from retail_simulator.core.demand import DemandResult, per_region_stock
 from retail_simulator.core.state import WorldState
 
-# Reference unit price. ``price_index`` is a multiplier on this; defined as a
-# module constant (not config) because it is the unit in which the whole money
-# system is denominated, not a tunable knob.
+# Reference unit price; price_index is a multiplier on it.
 BASE_PRICE: float = 1.0
+
+
+def _as_float_array(
+    value: npt.NDArray[np.float64] | None, like: npt.NDArray[np.float64]
+) -> npt.NDArray[np.float64]:
+    """Coerce an optional [K] array to float64, defaulting to zeros shaped like ``like``."""
+    return np.zeros_like(like) if value is None else np.asarray(value, dtype=np.float64)
 
 
 @dataclass(frozen=True)
 class AccountingResult:
-    """Per-retailer financial outcome of one tick (arrays in agent-index order).
-
-    ``revenue``/``cogs``/``opex``/``marketing``/``capex``/``profit``/``new_cash``
-    are ``[K]`` (per retailer, regions summed). ``market_share`` mirrors
-    ``DemandResult.shares`` (``[R, K]`` per-region realized share). ``new_loyalty``
-    is the post-update PER-REGION loyalty stock (``[R, K]``). ``new_cash`` already
-    includes this tick's profit minus capex.
-    """
+    """Per-retailer financial outcome of one tick (regions summed)."""
 
     revenue: npt.NDArray[np.float64]  # [K]
     cogs: npt.NDArray[np.float64]  # [K]
@@ -84,49 +53,32 @@ def apply_accounting(
     overhead: npt.NDArray[np.float64] | None = None,
     warehouse_spend: npt.NDArray[np.float64] | None = None,
 ) -> AccountingResult:
-    """ """
+    """Compute one tick of revenue, COGS, opex, profit, and new cash."""
     cost_cfg = config.cost
     alpha = config.loyalty.alpha
 
     units = np.asarray(demand_result.units, dtype=np.float64)  # [R, K]
     price_indices = demand_result.price_indices  # [K]
     cash = np.array([r.cash for r in state.retailers], dtype=np.float64)
-    # Per-store opex scales with the number of OPEN stores summed across regions
-    # (Phase 0.4): a 2-region agent pays fixed_opex_per_store * 2 per tick.
+    # Per-store opex scales with the number of open stores.
     stores_total = np.array([sum(r.stores_per_region) for r in state.retailers], dtype=np.float64)
-    # Seated per-region loyalty [R, K] (the awareness template, per-region). S6:
-    # reuse demand.py's (now vectorized) padded-array builder instead of a bespoke
-    # K×R nested comprehension — this was a pre-existing duplicate of the exact same
-    # ragged-tuple-to-[R,K] shape ``per_region_stock`` already builds for
-    # ``resolve_demand``'s own awareness/loyalty/service_score reads.
+    # Seated per-region loyalty [R, K].
     n_regions = len(state.regions)
     loyalty_per_region = per_region_stock(state, "loyalty_per_region", n_regions)  # [R, K]
 
-    # Per-region revenue/COGS/promo summed to a per-retailer [K] total. price_indices
-    # broadcasts over the region axis (one price per retailer applied everywhere).
+    # Sum per-region revenue to a per-retailer total.
     revenue = (units * price_indices[None, :] * BASE_PRICE).sum(axis=0)  # [K]
-    # Phase 1.1: COGS uses the per-retailer ``DemandResult.cogs_fraction`` (NOT
-    # ``cost_cfg.cogs_fraction`` directly). The fraction broadcasts over the region axis
-    # (one fraction per retailer; the SCM lever is scalar per retailer). At
-    # ``cogs_premium = 0`` (default) it equals ``cost_cfg.cogs_fraction`` for every
-    # retailer ⇒ the line collapses to the 1.0 form, byte-identical.
+    # COGS uses the per-retailer effective fraction from DemandResult.
     cogs_fraction = np.asarray(demand_result.cogs_fraction, dtype=np.float64)  # [K]
     cogs = (cogs_fraction[None, :] * units * BASE_PRICE).sum(axis=0)  # [K]
 
-    # opex = per-store opex (× stores_total) + assortment cost (ONCE per retailer, a
-    # scalar lever applied everywhere — charging it per region would double-count a
-    # single breadth decision) + the per-unit-moved promo cost (per region, summed,
-    # because units are per-region). All read from the SoTs, never re-decoded.
+    # opex = per-store opex + assortment cost (once) + promo cost (per unit sold).
     assortment = np.asarray(demand_result.assortment, dtype=np.float64)  # [K]
     promotion = np.asarray(demand_result.promotion, dtype=np.float64)  # [K]
     promo_cost = (config.promotion.promo_cost_per_unit * promotion[None, :] * units).sum(
         axis=0
     )  # [K]
-    # Phase 1.0 research opex: cost_per_fidelity · research_spend, charged ONCE per
-    # retailer (a scalar spend, like the assortment add-on). Every shipped NPC archetype
-    # emits research 0 (they are not observers) so a scripted seat contributes 0 — but it
-    # is charged like anyone else if one ever does (NFD-1); at the lever default research
-    # 0 the whole line is 0 ⇒ opex byte-identical to 0.5.
+    # Research opex: cost_per_fidelity * research spend, once per retailer.
     # The ONLY economic effect of the research lever — deterministic, no RNG.
     research = np.asarray(demand_result.research, dtype=np.float64)  # [K]
     research_cost = config.research.cost_per_fidelity * research  # [K]
@@ -141,39 +93,18 @@ def apply_accounting(
     )
     marketing = np.asarray(demand_result.marketing_spend, dtype=np.float64)  # [K]
 
-    # Phase 1.2: total capex = expansion + automation (both cash items; both default
-    # to zeros for backward-compat with all pre-1.2 callers AND for the byte-identity
-    # gate at default config — automation_capex is zero because the default
-    # ``AutomationConfig.capex_per_tier = (0,0,0)``). Stored on AccountingResult.capex
-    # as the SUM (the cash-identity contributor); the seam threads them in already
-    # gated by the affordability check (no double-application).
-    expansion_capex_arr = (
-        np.zeros_like(revenue) if capex is None else np.asarray(capex, dtype=np.float64)
-    )
-    automation_capex_arr = (
-        np.zeros_like(revenue)
-        if automation_capex is None
-        else np.asarray(automation_capex, dtype=np.float64)
-    )
+    # Total capex = expansion + automation; both arrive pre-gated by the
+    # affordability check (no double-application).
+    expansion_capex_arr = _as_float_array(capex, revenue)
+    automation_capex_arr = _as_float_array(automation_capex, revenue)
     capex_arr = expansion_capex_arr + automation_capex_arr
 
-    wage_bill_arr = (
-        np.zeros_like(revenue) if wage_bill is None else np.asarray(wage_bill, dtype=np.float64)
-    )
-    overhead_arr = (
-        np.zeros_like(revenue) if overhead is None else np.asarray(overhead, dtype=np.float64)
-    )
-    warehouse_spend_arr = (
-        np.zeros_like(revenue)
-        if warehouse_spend is None
-        else np.asarray(warehouse_spend, dtype=np.float64)
-    )
+    wage_bill_arr = _as_float_array(wage_bill, revenue)
+    overhead_arr = _as_float_array(overhead, revenue)
+    warehouse_spend_arr = _as_float_array(warehouse_spend, revenue)
     cash_budget_enabled = config.wage.cash_budget_enabled
-    # ``overdraft_rate`` is one more trigger (senior review m1): arming ONLY that knob —
-    # no wage bill, no overhead, no warehouse spend, budget gate off — must still reach
-    # the Phase-4 branch, or the line silently charges nothing. Default 0.0 keeps the
-    # inert path exactly as it was.
-    phase4_active = (
+    # Any ledger input (or a nonzero overdraft rate) takes the ledger path.
+    ledger_active = (
         wage_bill is not None
         or overhead is not None
         or cash_budget_enabled
@@ -181,21 +112,14 @@ def apply_accounting(
         or config.wage.overdraft_rate != 0.0
     )
 
-    # M1: the per-retailer negative-cash signal (populated only on the Phase-4 path —
-    # an EMPTY array otherwise so the inert path is byte-identical and carries no flag).
+    # Negative-cash signal; empty on the default path.
     cash_negative = np.zeros(0, dtype=bool)
-    if not phase4_active:
-        # Pre-Phase-4 path — UNCHANGED float-op order (the byte-identity anchor).
+    if not ledger_active:
+        # Default path (byte-identical float-op order).
         profit = revenue - cogs - opex - marketing
         new_cash = cash + profit - capex_arr
     else:
-        # Phase-4/5 ledger path. NOTHING here is scaled: the affordability clamp
-        # (MECHANIC 1) already ran in ``World.step`` BEFORE demand, so ``marketing`` /
-        # ``assortment`` / ``research`` / ``loyalty_spend`` / ``wage_bill`` /
-        # ``warehouse_spend`` arrive at the value the retailer could actually fund AND
-        # the value demand resolved against (CLAMP-T2/T3 — see the module docstring).
-        # ``promo_cost`` is a variable cost of SALES (funded per unit sold, hence never
-        # clamped, design note Q1) and capex is charged IN FULL, as gated.
+        # Ledger path: levers arrive pre-clamped and capex is charged in full, as gated.
         assortment_cost = config.assortment.assortment_cost_per_unit * assortment
         non_clamped_opex = research_cost + loyalty_program_cost
         opex = (
@@ -207,19 +131,7 @@ def apply_accounting(
             + warehouse_spend_arr
             + overhead_arr
         )
-        #
-        # Bound the charged deficit to ``credit_limit`` — the credit the retailer can
-        # actually draw on (``core/affordability.py::compute_spend_clamp``) — instead
-        # of the whole unbounded ``-cash``. With bankruptcy deferred there is no
-        # terminal state, so an unbounded charge would compound geometrically forever
-        # once cash goes negative (``cash_{t+1} ~= (1+overdraft_rate)*cash_t``,
-        # policy-independent, unbounded) instead of the affine-at-worst dynamic a REAL
-        # credit line implies: you are only ever charged interest on what you actually
-        # drew, and what you can draw is capped by the limit. This also makes
-        # ``core/config.py``'s own ``credit_limit`` docstring true — it already
-        # promises the line is "priced every tick it is drawn on", and drawn credit
-        # can never exceed ``credit_limit``.
-        #
+        # Interest is charged only on drawn credit, capped at credit_limit.
         overdraft_rate = config.wage.overdraft_rate
         if overdraft_rate != 0.0:
             drawn = np.minimum(np.maximum(0.0, -cash), config.wage.credit_limit)
@@ -229,7 +141,7 @@ def apply_accounting(
         cash_negative = new_cash < 0.0
 
     market_share = demand_result.shares  # [R, K]
-    # Per-region loyalty accrual: alpha * seated + (1-alpha) * this-tick share.
+    # Per-region loyalty accrual: EMA of seated stock and this-tick share.
     new_loyalty = alpha * loyalty_per_region + (1.0 - alpha) * market_share  # [R, K]
 
     return AccountingResult(

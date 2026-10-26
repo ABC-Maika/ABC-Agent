@@ -1,7 +1,4 @@
-"""Shared DX info-enrichment for the RL adapters (Gym + PettingZoo Parallel).
-
-Adapter layer: numpy + core only (no gymnasium / pettingzoo needed here).
-"""
+"""Shared info-dict enrichment for the Gym and PettingZoo adapters."""
 
 from __future__ import annotations
 
@@ -18,17 +15,14 @@ def _stockout_rate_from_service_score_change(
     decay: float,
     lost_penalty: float,
 ) -> float:
-    """ """
+    """Invert the service-score EMA recurrence to recover the stockout rate."""
     if lost_penalty <= 0.0:
-        # Default-config invariant: no stockouts are possible (the lever's economic
-        # baseline is service_level=1.0 + cogs_premium=0). Report 0.0 — the truth at
-        # the default. A scenario that wants stockout signal sets penalty > 0.
+        # No stockouts are possible at the default config (service_level=1.0, cogs_premium=0); report 0.0.
         return 0.0
     raw = next_score - (1.0 - decay) * prior
     # raw = decay * (1 - lost_penalty * sr); solve for sr.
     sr = (1.0 - raw / decay) / lost_penalty
-    # Clamp into [0, 1]: the inversion may exceed bounds if the EMA hit the [0, 1]
-    # clip in world.step (an upper bound on the truth — the EMA saturated).
+    # Clamp to [0, 1]: the inversion may exceed bounds if the EMA saturated.
     return float(min(max(sr, 0.0), 1.0))
 
 
@@ -52,16 +46,12 @@ def enrich_agent_info(
     wage_spend_action: float = 0.0,
     warehouse_invest_action: float = 0.0,
 ) -> dict[str, Any]:
-    """ """
+    """Return the agent's enriched info dict: seated state, decoded actions, stockout rates."""
     me = state.retailers[seat_index]
     stockpile = sum(region.stockpile for region in state.regions)
-    # The seated fidelity is the seam's authority (draw #4 seats it per observer; the
-    # reset placeholder is 0.0). Read it; default 0.0 only guards a seat with no seated
-    # view (NPC seats are not observers — they never appear here).
+    # Seated fidelity is the seam's authority (0.0 when no view is seated).
     research_fidelity = state.research_fidelity.get(seat_index, 0.0)
-    # Phase 1.1: the agent's OWN seated per-region service_score is the seam's authority
-    # (own state, EXACT — never noised). Read it; padding with the 1.0 fixed point if
-    # a state carries fewer per-region entries than the schema's two slots.
+    # Own seated per-region service_score (exact); pad with the 1.0 fixed point.
     service_score = me.service_score_per_region
     service_score_region_0 = float(service_score[0]) if len(service_score) > 0 else 1.0
     service_score_region_1 = float(service_score[1]) if len(service_score) > 1 else 1.0
@@ -85,24 +75,11 @@ def enrich_agent_info(
             prior_1, service_score_region_1, decay=decay, lost_penalty=lost_penalty
         )
 
-    # Phase 1.2 (F3 = PERMANENT): the SEATED tier the seam wrote (the SoT for "the
-    # tier that the next tick's demand will read"). Monotone non-decreasing integer;
-    # on a no-op upgrade it equals the prior tier, on a valid upgrade it equals the
-    # decoded target. At reset / on a state with no step run, this is 0 (the
-    # RetailerState default — the no-automation baseline).
+    # Seated automation tier: the value the next tick's demand will read.
     automation_tier_seated = int(me.automation_tier)
-    # Phase 1.2: the DECODED TARGET tier the seam wrote AFTER the upgrade gate read
-    # it (the reporting-only target, BEFORE the mask resolves monotonicity /
-    # affordability — the analog of expansion's ``last_expansion``). At reset this
-    # is 0 (the RetailerState default).
+    # Decoded target tier before the upgrade gate resolved it (reporting-only).
     last_automation_tier_action = int(me.last_automation_tier_action)
-    # Phase 1.2: the cash debited THIS tick by the upgrade gate — the DIFFERENTIAL
-    # ``capex_per_tier[automation_tier] − capex_per_tier[prior_automation_tier]``
-    # (the SAME quantity ``apply_accounting`` charged; single-sourced from the SoT
-    # — no recompute). When the caller omits ``config`` (e.g. at reset before a
-    # step) OR ``prior_automation_tier`` (no prior available), default to 0.0 (the
-    # truth — no tick has been billed). Defensive clamps mirror the seam's gate
-    # (an out-of-range tier folds to capex 0).
+    # Cash debited this tick: the differential capex the upgrade gate charged.
     if config is None or prior_automation_tier is None:
         automation_capex = 0.0
     else:
@@ -124,7 +101,7 @@ def enrich_agent_info(
             "profit": float(me.last_profit),
             "market_share": float(me.last_market_share),
             "loyalty": float(me.loyalty_stock),
-            # Multi-region open-store count across regions (Phase 0.4).
+            # Total open stores across regions.
             "stores": int(sum(me.stores_per_region)),
             "tick": int(state.tick),
             "episode_step": int(episode_step),
@@ -134,13 +111,11 @@ def enrich_agent_info(
             "promotion": float(promotion),
             "stockpile": float(stockpile),
             "expansion_action": float(expansion_action),
-            # Phase 1.0: the decoded research spend this tick (the action taken) +
-            # the seated per-observer perception fidelity (the seam's authority).
+            # Decoded research spend this tick + seated perception fidelity.
             "research_action": float(research_action),
             "research_fidelity": float(research_fidelity),
-            # Phase 1.1: the decoded SCM action this tick + the per-region seated
-            # service_score (the agent's OWN state, EXACT) + the per-region stockout
-            # rate recovered from the deterministic EMA recurrence (a pure read).
+            # Decoded SCM action this tick + seated per-region service_score +
+            # per-region stockout rate recovered from the EMA recurrence.
             "service_level_action": float(service_level_action),
             "service_score_region_0": service_score_region_0,
             "service_score_region_1": service_score_region_1,
@@ -151,14 +126,8 @@ def enrich_agent_info(
             "last_automation_tier_action": last_automation_tier_action,
             "automation_capex": automation_capex,
             "loyalty_spend_action": float(loyalty_spend_action),
-            # Phase 5.0: the decoded wage_spend/warehouse_invest fractions this
-            # tick (the action taken; 0.0 at reset or when an older caller omits
-            # them) + the seated employee_happiness/warehouse_utilization/
-            # last_stockout_rate (the agent's OWN state, EXACT — a pure read off
-            # ``me``, no inversion needed). The seam consumes both decoded levers
-            # when their config knobs are armed; at ``CoreConfig.default()`` (both
-            # knobs inert) the three seated reads stay at their byte-identity
-            # defaults (1.0 / 0.0 / 0.0) regardless of the decoded action.
+            # Decoded wage/warehouse actions this tick + seated happiness/utilization/
+            # stockout (own state, exact).
             "wage_spend_action": float(wage_spend_action),
             "warehouse_invest_action": float(warehouse_invest_action),
             "employee_happiness": float(me.employee_happiness),
@@ -166,9 +135,6 @@ def enrich_agent_info(
             "last_stockout_rate": float(me.last_stockout_rate),
         }
     )
-    # action_mask is part of the public contract; the seam computes the REAL mask
-    # (compute_expansion_mask) and carries it in base_info, so it passes through
-    # unchanged. setdefault only guards a future seam revision that drops it — it never
-    # overwrites the seam's authoritative mask.
+    # action_mask is computed by the seam and carried in base_info; setdefault never overwrites it.
     info.setdefault("action_mask", None)
     return info

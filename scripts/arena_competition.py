@@ -2,7 +2,7 @@
 
 This script is argument parsing plus CSV/JSON writing. The seating, the per-seat expansion
 masking and the "log the EFFECTIVE decision" rule are OWNED by
-:mod:`retail_simulator.harness.arena_match` (``ArenaMatch`` / ``resolve_arena_world``), which
+:mod:`retail_simulator.envs.arena_match` (``ArenaMatch`` / ``resolve_arena_world``), which
 the leaderboard generator and the live demo drive too — change a rule there, not here. A
 match needs at least two seats, so a lone ``--player``/``--npc`` is rejected.
 
@@ -19,22 +19,26 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import logging
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 from retail_simulator.core.config import CoreConfig
-from retail_simulator.harness.arena import arena_home_regions
-from retail_simulator.harness.arena_match import (
+from retail_simulator.envs.arena import arena_home_regions
+from retail_simulator.envs.arena_match import (
     LOGGED_LEVERS,
     MIN_SEATS,
     ArenaMatch,
     ArenaSeatSpec,
     resolve_arena_world,
 )
-from retail_simulator.harness.geo_archetypes import GEO_ARCHETYPE_LABELS
+from retail_simulator.envs.geo_archetypes import GEO_ARCHETYPE_LABELS
+from retail_simulator.logging_setup import configure_logging
 
 __all__ = ["LOGGED_LEVERS", "main"]
+
+_log = logging.getLogger("arena_competition")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -181,7 +185,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def _resolve_world(args: argparse.Namespace) -> tuple[CoreConfig, str, dict[str, float]]:
     """Build the match's world, a label naming its base world, and the overrides applied.
 
-    A thin adapter over :func:`~retail_simulator.harness.arena_match.resolve_arena_world`,
+    A thin adapter over :func:`~retail_simulator.envs.arena_match.resolve_arena_world`,
     which owns the rule (``scripts/gen_leaderboard_artifact.py`` resolves its world through
     the same function, so the two scripts cannot drift).
     """
@@ -209,7 +213,7 @@ def _resolve_world(args: argparse.Namespace) -> tuple[CoreConfig, str, dict[str,
 
 
 def _effective_knobs(cfg: CoreConfig) -> dict[str, float]:
-    """ """
+    """The effective knob values of the match's world, as a flat dict for the CSV/JSON."""
     knobs: dict[str, float] = {
         "overhead_reference_stores": cfg.wage.overhead_reference_stores,
         "overhead_exponent": cfg.wage.overhead_exponent,
@@ -256,6 +260,7 @@ def _parse_players(specs: Sequence[str], parser: argparse.ArgumentParser) -> dic
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    configure_logging()
     parser = _build_parser()
     args = parser.parse_args(argv)
 
@@ -264,12 +269,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.overhead is not None and args.balanced:
         parser.error("--overhead builds its own world from arena_config(); drop --balanced")
     if args.overhead is not None and args.overhead_reference_stores is not None:
-        # MINOR 3 (senior review, round 2): --overhead already IS overhead_reference_stores
-        # (it builds arena_config(overhead_reference_stores=VALUE) directly) -- combining it
-        # with the --overhead-reference-stores brake would build a world at one value while
-        # the "env" label (which --overhead computes FROM its own argument) names the other,
-        # a silent mismatch (measured: --overhead 4.2 --overhead-reference-stores 7.15 ->
-        # label says 4.2, world holds 7.15). Reject the pair, exactly like --balanced above.
+        # --overhead already sets overhead_reference_stores (it builds the world from that value), so
+        # combining it with the brake would build one world but label another -- a silent mismatch.
+        # Reject the pair, like --balanced above.
         parser.error(
             "--overhead already sets overhead_reference_stores; drop --overhead-reference-stores"
         )
@@ -312,10 +314,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(str(exc))
     masked = match.masked_seats
 
+    _log.info(
+        "arena match starting: %s world · %d seat(s) (%d masked) · %d round(s) · seed=%d",
+        env_label,
+        n_seats,
+        len(masked),
+        args.rounds,
+        args.seed,
+    )
     rows: list[dict[str, Any]] = []
     totals = {name: {"score": 0.0, "revenue": 0.0, "profit": 0.0} for name in seat_names}
+    log_every = max(args.rounds // 10, 1)
 
-    for _ in range(args.rounds):
+    for round_index in range(args.rounds):
         result = match.step()
         for seat, seat_round in enumerate(result.seats):
             name = seat_names[seat]
@@ -342,6 +353,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 value = seat_round.levers.get(lever)
                 row[lever] = None if value is None else round(float(value), 4)
             rows.append(row)
+        if (round_index + 1) % log_every == 0 or round_index + 1 == args.rounds:
+            leader = max(seat_names, key=lambda name: totals[name]["score"])
+            _log.info(
+                "round %d/%d · leader: %s (%s score)",
+                round_index + 1,
+                args.rounds,
+                leader,
+                f"{totals[leader]['score']:,.0f}",
+            )
 
     args.csv.parent.mkdir(parents=True, exist_ok=True)
     with args.csv.open("w", newline="") as handle:
@@ -376,6 +396,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(payload, indent=2) + "\n")
+    _log.info("match done: decisions -> %s · results -> %s", args.csv, args.out)
 
     if not args.quiet:
         order = sorted(standings, key=lambda name: -standings[name]["total_score"])

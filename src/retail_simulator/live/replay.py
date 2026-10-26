@@ -1,16 +1,11 @@
-"""Phase 2 Slice A T-A3 — the offline replay validator (AC-4 substrate).
+"""The offline replay validator.
 
-Slice A scoping (NOT-YET): the manifest's ``config_summary`` field is a
-forward-compat dict reserved for richer scenarios; the Slice A reconstruction
-path pins ``CoreConfig.default()`` and seats only the manifest's
-``n_agents`` + ``npc_archetypes``. Slice B+ may extend the reconstruction
-to honor a full scenario snapshot — the dataclass already carries the
-``config_summary`` field for that extension point.
-
-Pure-Python — no asyncio, no ``websockets``. Importable without the ``[serve]``
-extra (the lazy-import contract from the Slice A package docstring); only
-stdlib + numpy + ``core`` + ``envs.parallel_env``. The replay tool is the
-offline complement to Slice B's online server.
+Pure Python — no asyncio, no ``websockets``; importable without the
+``[serve]`` extra (stdlib + numpy + ``core`` + ``envs``). Rebuilds the env
+from the on-disk manifest + action log and diffs each tick. The
+reconstruction path pins ``CoreConfig.default()`` and seats only the
+manifest's ``n_agents`` + ``npc_archetypes`` (``config_summary`` is a reserved
+extension hook).
 """
 
 from __future__ import annotations
@@ -29,15 +24,10 @@ from retail_simulator.envs.parallel_env import RetailParallelEnv
 
 @dataclass(frozen=True)
 class ReplayManifest:
-    """Per-game manifest written alongside the action-log.
+    """Per-game manifest written alongside the action log.
 
-    Carries every input the determinism contract needs so :func:`replay` can
-    rebuild the SAME :class:`RetailParallelEnv` from disk: the seam's seed,
-    the seat plan (``n_agents`` + ``npc_archetypes``), the schema version
-    (catches a live game replayed under a re-numbered schema), and the
-    package version (catches a live game replayed under different economics
-    code). ``config_summary`` is a Slice B+ extension hook — Slice A pins
-    ``CoreConfig.default()`` and ignores this field on read.
+    Carries every input the determinism contract needs to rebuild the same env:
+    the seam's seed, the seat plan, the schema version, and the package version.
     """
 
     game_id: str
@@ -48,24 +38,20 @@ class ReplayManifest:
     started_at_iso: str
     schema_version: int
     software_version: str
-    # Reserved for richer scenario reconstruction (Slice B+); empty dict on Slice A.
+    # Reserved for richer scenario reconstruction; empty dict for now.
     config_summary: dict[str, Any] = field(default_factory=dict)
 
     def to_json(self) -> str:
-        """Serialize as a single JSON object string. ``npc_archetypes`` flattens to a list."""
+        """Serialize as a single JSON object string."""
         payload = asdict(self)
-        # Tuples are not JSON-native; ``asdict`` flattens to list, and
-        # :meth:`from_json` rebuilds the tuple so the dataclass stays hashable.
+        # Tuples are not JSON-native; ``asdict`` flattens to lists and ``from_json`` rebuilds the tuple.
         return json.dumps(payload, sort_keys=True, indent=2)
 
     @classmethod
     def from_json(cls, s: str) -> ReplayManifest:
-        """Parse a manifest JSON string. Raises ``ValueError`` on missing keys.
+        """Parse a manifest JSON string; raise ``ValueError`` on missing keys.
 
-        Boundary validation: a missing required key fails loudly with the key
-        name in the error message (operator-greppable). Unknown extra keys are
-        IGNORED to keep forward-compat: a Slice B+ manifest can carry extra
-        fields and this loader still parses it.
+        Unknown extra keys are ignored (forward-compat).
         """
         try:
             data = json.loads(s)
@@ -97,15 +83,11 @@ class ReplayManifest:
 class ActionLogRecord:
     """One JSONL record per tick (``runs/<game-id>/action_log.jsonl``).
 
-    Carries BOTH halves of a tick (the joint action applied AND the per-seat
-    observations + rewards the seam returned) so :func:`replay` reduces to
-    "re-step and diff" — no separate observations file. ``missing_seats``
-    records which seats fell back to last-valid-or-default (AC-2 audit
-    trail); ``deadline_ns`` is the absolute wall-clock deadline the live
-    server collected this tick against (operator audit).
-
-    Fields use Python lists (not numpy arrays) so the dataclass is JSON-safe
-    via :func:`json.dumps`; :meth:`to_json` is a one-call ``dumps``.
+    Carries both halves of a tick — the joint action applied AND the per-seat
+    observations + rewards the seam returned. ``missing_seats`` records which
+    seats fell back to last-valid-or-default; ``deadline_ns`` is the wall-clock
+    deadline the server collected against. Fields use Python lists so the
+    dataclass is JSON-safe.
     """
 
     tick: int
@@ -117,18 +99,12 @@ class ActionLogRecord:
 
     def to_json(self) -> str:
         """Serialize as a single-line JSON object (the JSONL contract)."""
-        # No indent: JSONL is one record per line. ``json.dumps`` defaults to
-        # no trailing newline; the writer adds ``"\n"`` per record.
+        # No indent: JSONL is one record per line (the writer adds the newline).
         return json.dumps(asdict(self))
 
     @classmethod
     def from_json(cls, s: str) -> ActionLogRecord:
-        """Parse one JSONL line into a record. Raises ``ValueError`` on malformed input.
-
-        The boundary parser: validates required keys are present and reasonably
-        shaped (dicts of lists / dicts of floats / list of ints). Per-element
-        type coercion is permissive (int accepted as float, per JSON semantics).
-        """
+        """Parse one JSONL line into a record; raise ``ValueError`` on malformed input."""
         try:
             data = json.loads(s)
         except json.JSONDecodeError as exc:
@@ -170,12 +146,9 @@ class ActionLogRecord:
 class ReplayResult:
     """Outcome of a replay run.
 
-    Boolean ``ok`` is the AC-4 verdict: ``True`` iff every per-seat
-    ``(observation, reward)`` matched bit-for-bit against the recorded log.
-    On failure ``first_divergence_tick`` localizes the divergence and
-    ``divergence_summary`` carries an operator-readable explanation.
-    ``n_ticks_replayed`` is the count of records successfully processed
-    (1-based; on a tick-0 divergence the value is 1).
+    ``ok`` is ``True`` iff every per-seat ``(observation, reward)`` matched the
+    recorded log bit-for-bit. On failure ``first_divergence_tick`` localizes the
+    divergence. ``n_ticks_replayed`` counts records processed (1-based).
     """
 
     ok: bool
@@ -185,13 +158,7 @@ class ReplayResult:
 
 
 def read_manifest(manifest_path: Path) -> ReplayManifest:
-    """Read + parse a manifest JSON file.
-
-    ``FileNotFoundError`` (with the offending path in the message) is the
-    explicit signal a missing path produces — same discipline as
-    :meth:`FrozenPolicyPool.load`. Parser errors propagate as ``ValueError``
-    from :meth:`ReplayManifest.from_json`.
-    """
+    """Read + parse a manifest JSON file; ``FileNotFoundError`` names the missing path."""
     if not manifest_path.exists():
         raise FileNotFoundError(
             f"read_manifest: no manifest at {manifest_path}; "
@@ -203,14 +170,8 @@ def read_manifest(manifest_path: Path) -> ReplayManifest:
 def read_action_log(log_path: Path) -> Iterator[ActionLogRecord]:
     """Lazily yield one :class:`ActionLogRecord` per JSONL line.
 
-    The lazy iterator lets ``replay`` early-exit on first divergence without
-    materializing the whole log — important for long games (104 ticks at
-    schema v10 is ~2 KB but Phase 2.1+ may grow).
-
-    A trailing blank line (the operator's editor adding a newline) is
-    silently tolerated. A genuinely truncated last line (a crash mid-write)
-    surfaces as :class:`ValueError` from :meth:`ActionLogRecord.from_json` —
-    the reader does NOT swallow it; the AC-4 invariant prefers loud failure.
+    A trailing blank line is tolerated; a truncated last line surfaces as
+    :class:`ValueError` (loud failure preferred).
     """
     if not log_path.exists():
         raise FileNotFoundError(
@@ -227,11 +188,10 @@ def read_action_log(log_path: Path) -> Iterator[ActionLogRecord]:
 
 
 def replay(manifest_path: Path, log_path: Path) -> ReplayResult:
-    """ """
+    """Rebuild the env from the manifest, re-step the log, diff each tick; return the verdict."""
     manifest = read_manifest(manifest_path)
 
-    # The Slice A reconstruction (CoreConfig.default()); Slice B+ may switch
-    # on manifest.config_summary to rehydrate a richer scenario.
+    # Reconstruction pins CoreConfig.default(); a richer scenario can switch on manifest.config_summary.
     env = RetailParallelEnv(
         config=CoreConfig.default(),
         n_learning_agents=manifest.n_agents,
@@ -242,20 +202,14 @@ def replay(manifest_path: Path, log_path: Path) -> ReplayResult:
 
     n_processed = 0
     for record in read_action_log(log_path):
-        # Build the joint action dict for the env in the same agent-id keying
-        # the live server used. The live server's action log is keyed by
-        # ``retailer_<seat>`` (the parallel env's agent_id); we cast each
-        # list[float] back to a fresh float32 ndarray.
+        # Build the joint action dict in the same agent-id keying the live server used (retailer_<seat>).
         joint_action = {
             agent_id: np.asarray(action, dtype=np.float32)
             for agent_id, action in record.joint_action.items()
         }
         obs, rewards, _terms, _truncs, _infos = env.step(joint_action)
 
-        # Per-seat verification: compare each logged ``(obs, reward)`` against
-        # the just-stepped env. Bit-exact via ``np.array_equal`` for obs +
-        # exact ``==`` for the scalar reward (both must round-trip bit-for-bit
-        # under JSON per the protocol's float-precision invariant).
+        # Per-seat verification: bit-exact np.array_equal for obs, exact == for the reward.
         for agent_id, logged_obs_list in record.observations.items():
             logged_obs = np.asarray(logged_obs_list, dtype=np.float32)
             live_obs = obs[agent_id]
@@ -297,20 +251,20 @@ def replay(manifest_path: Path, log_path: Path) -> ReplayResult:
 
 
 def replay_game_dir(game_dir: Path, *, strict: bool = True) -> ReplayResult:
-    """ """
-    # Boundary validation: the game_dir argument is the operator's
-    # entry point — a typo'd path should surface with a greppable error
-    # naming what's missing (same discipline as :func:`read_manifest`).
+    """Replay the game directory (manifest + action log); raise ``FileNotFoundError`` naming what's missing.
+
+    With ``strict=True`` (default) a log shorter than the manifest's ``n_ticks``
+    is reported as a divergence; ``strict=False`` accepts partial trajectories
+    (crashed-server audit).
+    """
+    # Boundary validation: a typo'd path surfaces with a greppable error.
     if not game_dir.is_dir():
         raise FileNotFoundError(f"game_dir not found: {game_dir}")
 
     manifest_path = game_dir / "game_manifest.json"
     log_path = game_dir / "action_log.jsonl"
 
-    # Surface each missing canonical file SEPARATELY so the operator knows
-    # which half of the per-game artifact pair to investigate (the live
-    # server writes both; missing manifest ≠ missing log in terms of root
-    # cause — manifest is written at game start, log per-tick).
+    # Surface each missing file separately: the manifest is written at game start, the log per-tick.
     if not manifest_path.exists():
         raise FileNotFoundError(f"missing manifest at {manifest_path}")
     if not log_path.exists():
@@ -319,16 +273,11 @@ def replay_game_dir(game_dir: Path, *, strict: bool = True) -> ReplayResult:
     result = replay(manifest_path, log_path)
 
     if not strict:
-        # ``strict=False`` is the crashed-server-audit relaxation: accept
-        # whatever ticks were captured; the partial trajectory is the
-        # operator's evidence and the manifest's n_ticks is advisory.
+        # ``strict=False`` accepts whatever ticks were captured (crashed-server audit).
         return result
 
-    # ``strict=True``: an OK kernel result with fewer ticks than the
-    # manifest promised is a truncation — upgrade to a divergence so the
-    # CLI surfaces a non-zero exit. Genuine kernel divergences are left
-    # untouched (the kernel's first-divergence diagnostic is the right
-    # one to surface; we only fill in the truncation case the kernel
+    # ``strict=True``: an OK result with fewer ticks than the manifest promised is a
+    # truncation — upgrade to a divergence so the CLI exits non-zero.
     # itself does not detect).
     if result.ok:
         manifest = read_manifest(manifest_path)
