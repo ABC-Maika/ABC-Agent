@@ -202,7 +202,9 @@ def _load_checkpoint_model(member_id: str, policy_kind: PolicyKind, path: Path) 
                 f"requires sb3-contrib; install with: pip install 'retail-simulator[recurrent]' "
                 f"(or: pip install 'sb3-contrib>=2.3,<3.0')"
             ) from exc
-        return (RecurrentPPO if policy_kind == "lstm" else TQC).load(path)
+        if policy_kind == "lstm":
+            return RecurrentPPO.load(path)
+        return TQC.load(path)
     if policy_kind == "sac":
         from stable_baselines3 import SAC  # lazy by design
 
