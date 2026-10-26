@@ -33,7 +33,7 @@ _AUTOMATION_LEVER_NAME: str = "automation"
 _LOYALTY_LEVER_NAME: str = "loyalty_spend"
 
 
-# The default self-play competition: a clean all-learning duopoly (F1 default 2),
+# The default self-play competition: a clean all-learning duopoly (default 2),
 # scored on the weighted objective. Two homogeneous learning seats exercise the
 # param-share bridge + simultaneous actions + the per-seat normalizer.
 DEFAULT_N_LEARNING_AGENTS: int = 2

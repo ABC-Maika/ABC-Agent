@@ -263,13 +263,13 @@ def league_ladder(
         "--env",
         help="Which CoreConfig the ladder rolls out on — one of: "
         + ", ".join(_LADDER_ENV_BUILDERS)
-        + " ('default' = competition_config, the pre-RLB-2 behavior; 'calibrated' = "
-        "the Phase-4 calibrated_spike_config; 'arena' = the 25-region candidate-lock "
-        "arena, RLB-8a; 'arena-balanced' = the same 25-region arena with a "
-        "working-capital credit line + a smaller warehouse footprint (credit-line-"
-        "and-rebalance) — both arena envs seat both participants at "
+        + " ('default' = competition_config; 'calibrated' = "
+        "calibrated_spike_config; 'arena' = the 25-region candidate-lock "
+        "arena; 'arena-balanced' = the same 25-region arena with a "
+        "working-capital credit line + a smaller warehouse footprint "
+        "— both arena envs seat both participants at "
         "arena_home_regions(2)). Recorded in the artifact as config_label; folds "
-        "into the default ladder_id only when non-default, so every pre-RLB-2 "
+        "into the default ladder_id only when non-default, so every default-env "
         "ladder_id stays byte-identical.",
     ),
 ) -> None:

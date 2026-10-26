@@ -33,37 +33,37 @@ def competition_run(
     research_gate: bool = typer.Option(
         False,
         "--research-gate",
-        help="Phase 1.0 value-of-information gate: PPO WITH research vs the SAME policy with research FORCED OFF, in a VARYING-opponent substrate ((B)).",
+        help="Value-of-information gate: PPO WITH research vs the SAME policy with research FORCED OFF, in a VARYING-opponent substrate.",
     ),
     research_opponent: str = typer.Option(
         "wandering",
         "--research-opponent",
-        help="The varying opponent the research gate runs against (NEVER the constant discounter): default 'wandering' (exogenous, non-inferable —); 'balanced' is the partly-inferable reported-secondary.",
+        help="The varying opponent the research gate runs against (NEVER the constant discounter): default 'wandering' (exogenous, non-inferable); 'balanced' is the partly-inferable reported-secondary.",
     ),
     scm_gate: bool = typer.Option(
         False,
         "--scm-gate",
-        help="Phase 1.1 value-of-SCM gate: PPO WITH SCM vs the SAME policy with SCM FORCED-TO-DEFAULT (service_level=1.0) in the SCM scenario substrate (scm_gate_config — cogs_premium>0 AND lost_sales_share_penalty>0 AND CONVENIENCE-beta_service>0) vs the default Discounter (-B of).",
+        help="Value-of-SCM gate: PPO WITH SCM vs the SAME policy with SCM FORCED-TO-DEFAULT (service_level=1.0) in the SCM scenario substrate (scm_gate_config — cogs_premium>0 AND lost_sales_share_penalty>0 AND CONVENIENCE-beta_service>0) vs the default Discounter.",
     ),
     automation_gate: bool = typer.Option(
         False,
         "--automation-gate",
-        help="Phase 1.2 value-of-automation gate (F3 = PERMANENT): PPO WITH automation vs the SAME policy with the 3-wide automation block FORCED-TO-TIER-0 (the no-upgrade baseline + the byte-identity anchor) in the automation scenario substrate (automation_gate_config — capex_per_tier>0 AND savings_per_tier>0) vs the default Discounter (-B of).",
+        help="Value-of-automation gate: PPO WITH automation vs the SAME policy with the 3-wide automation block FORCED-TO-TIER-0 (the no-upgrade baseline + the byte-identity anchor) in the automation scenario substrate (automation_gate_config — capex_per_tier>0 AND savings_per_tier>0) vs the default Discounter.",
     ),
     loyalty_gate: bool = typer.Option(
         False,
         "--loyalty-gate",
-        help="Phase 1.3 value-of-active-loyalty-program gate: PPO WITH loyalty vs the SAME policy with loyalty_spend FORCED-TO-0.0 (the no-program baseline + the byte-identity anchor) in the loyalty scenario substrate (loyalty_gate_config — cost_per_unit_spend>0 AND BRAND_LOYAL beta_program>0) vs the default Discounter (-B of).",
+        help="Value-of-active-loyalty-program gate: PPO WITH loyalty vs the SAME policy with loyalty_spend FORCED-TO-0.0 (the no-program baseline + the byte-identity anchor) in the loyalty scenario substrate (loyalty_gate_config — cost_per_unit_spend>0 AND BRAND_LOYAL beta_program>0) vs the default Discounter.",
     ),
     curriculum: str = typer.Option(
         "",
         "--curriculum",
-        help="Phase 1.4 (F4-A + F5-A): training-time scenario curriculum name (e.g. 'phase_1_4_basic' — the 6-segment 3-variant curriculum). Training samples a fresh CoreConfig from the named distribution at each episode reset (a SEPARATE rng — NEVER the core PCG64); the eval / gate scenario is unchanged. Empty (the default) = no curriculum (1.3 CLI behavior).",
+        help="Training-time scenario curriculum name (e.g. 'phase_1_4_basic' — the 6-segment 3-variant curriculum). Training samples a fresh CoreConfig from the named distribution at each episode reset (a SEPARATE rng — NEVER the core PCG64); the eval / gate scenario is unchanged. Empty (the default) = no curriculum.",
     ),
     policy_kind: str = typer.Option(
         "mlp",
         "--policy-kind",
-        help="Phase 1.6 (F-LOCUS=A): policy class — 'mlp' (default; vanilla SB3 PPO, preserves every 0–1.5 byte-identity) or 'lstm' (RecurrentPPO with MlpLstmPolicy; requires the [recurrent] extra — sb3-contrib). The lstm path is opt-in; the default 'mlp' threads through to retail_simulator.envs.parallel_gate._make_shared_ppo unchanged.",
+        help="Policy class — 'mlp' (default; vanilla SB3 PPO, preserves the default byte-identity) or 'lstm' (RecurrentPPO with MlpLstmPolicy; requires the [recurrent] extra — sb3-contrib). The lstm path is opt-in; the default 'mlp' threads through to retail_simulator.envs.parallel_gate._make_shared_ppo unchanged.",
     ),
 ) -> None:
     """Run the multi-agent competition gate; write the report + per-agent metrics."""

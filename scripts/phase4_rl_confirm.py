@@ -423,7 +423,7 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         default=DEFAULT_PFSP_MIX_UNIFORM,
         help=(
-            f"""decision 10 (taken 2026-09-19): uniform-mixing floor passed to PFSPOpponentDistribution(mix_uniform=...) -- guarantees every eligible pool member keeps at least mix_uniform/n draw probability each round, preventing the single-opponent collapse measured (default:{DEFAULT_PFSP_MIX_UNIFORM}, no floor; must be in [0.0, 1.0])"""
+            f"""uniform-mixing floor passed to PFSPOpponentDistribution(mix_uniform=...) -- guarantees every eligible pool member keeps at least mix_uniform/n draw probability each round, preventing collapse onto a single opponent (default:{DEFAULT_PFSP_MIX_UNIFORM}, no floor; must be in [0.0, 1.0])"""
         ),
     )
     parser.add_argument(
@@ -460,7 +460,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--mask-expansion",
         action="store_true",
         help=(
-            "S8 (/ row S8): mask the learner's illegal expansion logits (already-open/unaffordable regions, and slots beyond n_regions) to -inf before its argmax decode, so it can only ever make a legal choice (hold is always legal but is not itself a region); the frozen opponent is never masked. Applies to the learner's TRAINING rollouts only -- the post-training tournament below and every evaluation/scoring surface (the ladder, league snapshot/round-end evaluations, the arena) always roll out UNMASKED; see the summary JSON's training.mask_expansion_scope field. Recorded in training.mask_expansion. Default (off) is byte-identical to every prior run"
+            "mask the learner's illegal expansion logits (already-open/unaffordable regions, and slots beyond n_regions) to -inf before its argmax decode, so it can only ever make a legal choice (hold is always legal but is not itself a region); the frozen opponent is never masked. Applies to the learner's TRAINING rollouts only -- the post-training tournament below and every evaluation/scoring surface (the ladder, league snapshot/round-end evaluations, the arena) always roll out UNMASKED; see the summary JSON's training.mask_expansion_scope field. Recorded in training.mask_expansion. Default (off) is byte-identical to every prior run"
         ),
     )
     parser.add_argument(
@@ -468,14 +468,14 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help=(
-            "decision 8 (taken 2026-09-18): the league training-episode horizon, passed straight through to run_league_training(max_episode_steps=...) -> every LeagueEnvWrapper it builds. Default (unset -> None) never truncates -- one opponent per round, byte-identical to every prior run. A positive int truncates each round's game at that many ticks so the SuperSuit bridge auto-resets mid-round and draws a NEW opponent per EPISODE instead (the arena recipe uses 1000, the arena match horizon). Recorded in training.max_episode_steps; null under --resume (train_league skipped, mirrors --mask-expansion/--ent-coef/--gae-lambda)"
+            "the league training-episode horizon, passed straight through to run_league_training(max_episode_steps=...) -> every LeagueEnvWrapper it builds. Default (unset -> None) never truncates -- one opponent per round, byte-identical to every prior run. A positive int truncates each round's game at that many ticks so the SuperSuit bridge auto-resets mid-round and draws a NEW opponent per EPISODE instead (the arena recipe uses 1000, the arena match horizon). Recorded in training.max_episode_steps; null under --resume (train_league skipped, mirrors --mask-expansion/--ent-coef/--gae-lambda)"
         ),
     )
     parser.add_argument(
         "--warm-start",
         action="store_true",
         help=(
-            "owner decision 12a (taken 2026-09-19): round k>=2 continues from round "
+            "round k>=2 continues from round "
             "(k-1)'s just-trained checkpoint's policy PARAMETERS instead of an "
             "independent from-scratch init, passed straight through to "
             "run_league_training(warm_start=...) -- see that function's own "
@@ -490,7 +490,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--seed-archetypes",
         action="store_true",
         help=(
-            "seed the pool with a fixed-opponent archetype roster alongside the default scripted seed, following --env (H4, addendum; RLB-8b): under --env calibrated (default), the three calibrated Phase 4 spike postures (lean, aggressor, patient); under --env arena, the four closed-loop geo postures (sprawler, fortress, cherry-picker, fast-follower) instead — the spike postures' fixed expansion_choice can only ever open region 1 there. Default behavior (off) is byte-identical to every prior run"
+            "seed the pool with a fixed-opponent archetype roster alongside the default scripted seed, following --env: under --env calibrated (default), the three calibrated spike postures (lean, aggressor, patient); under --env arena, the four closed-loop geo postures (sprawler, fortress, cherry-picker, fast-follower) instead — the spike postures' fixed expansion_choice can only ever open region 1 there. Default behavior (off) is byte-identical to every prior run"
         ),
     )
     parser.add_argument(
@@ -498,8 +498,8 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["calibrated", "arena", "arena-balanced"],
         default="calibrated",
         help=(
-            "which world train_league trains on and the tournament rates on "
-            "(RLB-8a; credit-line-and-rebalance): 'calibrated' (default) is "
+            "which world train_league trains on and the tournament rates on: "
+            "'calibrated' (default) is "
             "calibrated_spike_config, byte-identical to every prior run; 'arena' is "
             "the 25-region candidate-lock arena (harness.arena.arena_lock_config); "
             "'arena-balanced' is the same 25-region arena with a working-capital "
@@ -514,7 +514,7 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["profit", "weighted"],
         default=None,
         help=(
-            "override the resolved --env's reward mode (core/reward.py; H5) for BOTH training and the tournament: 'profit' is raw profit, 'weighted' is the DESIGN-locked per-component z-normalized blend (RewardConfig's own weights). Default (unset) leaves the resolved env's own reward mode untouched -- calibrated/arena/arena-balanced all default to 'profit', byte-identical to every prior run, and a caller that already resolved a 'weighted' config (arena_train_player.py's monkey-patched env resolver) is never silently reset to 'profit' by this flag's own default. Applied AFTER --env resolves, so it always wins when given explicitly. Recorded in training.reward_mode (never null, even under --resume, since it also governs the tournament step)."
+            "override the resolved --env's reward mode (core/reward.py) for BOTH training and the tournament: 'profit' is raw profit, 'weighted' is the DESIGN-locked per-component z-normalized blend (RewardConfig's own weights). Default (unset) leaves the resolved env's own reward mode untouched -- calibrated/arena/arena-balanced all default to 'profit', byte-identical to every prior run, and a caller that already resolved a 'weighted' config (arena_train_player.py's monkey-patched env resolver) is never silently reset to 'profit' by this flag's own default. Applied AFTER --env resolves, so it always wins when given explicitly. Recorded in training.reward_mode (never null, even under --resume, since it also governs the tournament step)."
         ),
     )
     parser.add_argument(

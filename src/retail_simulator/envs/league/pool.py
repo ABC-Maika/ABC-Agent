@@ -515,7 +515,7 @@ class FrozenPolicyPool:
                 raise NotImplementedError(
                     f"scripted PoolMember {member.member_id!r} is seated via the env's "
                     f"npc_archetypes (the core's _make_npc_policy seam), NOT via this "
-                    f"callable; the league wrapper (Slice A T-A3) handles the seating"
+                    f"callable; the league wrapper handles the seating"
                 )
 
             return _scripted_placeholder

@@ -43,7 +43,7 @@ def league_train(
     curriculum_seed: int = typer.Option(
         0,
         "--curriculum-seed",
-        help="Seeds the curriculum wrapper's harness Generator under F3-A composition.",
+        help="Seeds the curriculum wrapper's harness Generator under curriculum composition.",
     ),
     core_seed: int = typer.Option(
         42,
@@ -53,20 +53,20 @@ def league_train(
     curriculum: str = typer.Option(
         "",
         "--curriculum",
-        help="Phase 1.4 curriculum NAME (e.g. 'phase_1_4_basic') to compose under the "
-        "league (F3-A stacked). Empty (default) = no curriculum.",
+        help="Curriculum NAME (e.g. 'phase_1_4_basic') to compose under the "
+        "league (stacked). Empty (default) = no curriculum.",
     ),
     league: str = typer.Option(
         DEFAULT_LEAGUE_NAME,
         "--league",
-        help="Named league (pool seed). Defaults to the F5-A seeded basic league.",
+        help="Named league (pool seed). Defaults to the seeded basic league.",
     ),
     distribution: str = typer.Option(
         "uniform",
         "--distribution",
         help=(
-            "Opponent distribution: 'uniform' (default; backward compat with Slice B) "
-            "or 'pfsp' (Slice C; win-rate-weighted via PFSPOpponentDistribution)."
+            "Opponent distribution: 'uniform' (default) "
+            "or 'pfsp' (win-rate-weighted via PFSPOpponentDistribution)."
         ),
     ),
     pfsp_alpha: float = typer.Option(
@@ -96,7 +96,7 @@ def league_train(
     policy_kind: str = typer.Option(
         "mlp",
         "--policy-kind",
-        help="Phase 1.6 (F-LOCUS=A): policy class for every per-round _make_shared_ppo call — 'mlp' (default; vanilla SB3 PPO, preserves every Slice C byte-identity) or 'lstm' (RecurrentPPO with MlpLstmPolicy; requires the [recurrent] extra — sb3-contrib). The lstm path is opt-in; the default 'mlp' threads through to envs.league.run_league_training unchanged.",
+        help="Policy class for every per-round _make_shared_ppo call — 'mlp' (default; vanilla SB3 PPO, preserves the default byte-identity) or 'lstm' (RecurrentPPO with MlpLstmPolicy; requires the [recurrent] extra — sb3-contrib). The lstm path is opt-in; the default 'mlp' threads through to envs.league.run_league_training unchanged.",
     ),
 ) -> None:
     """Train rounds of PPO against a growing opponent pool; write the pool + a JSON result."""
@@ -337,7 +337,7 @@ def league_generalization(
     curriculum: str = typer.Option(
         "phase_1_4_basic",
         "--curriculum",
-        help="Phase 1.4 curriculum NAME the curriculum-trained PPO is trained against.",
+        help="Curriculum NAME the curriculum-trained PPO is trained against.",
     ),
     train_steps: int = typer.Option(
         2_000_000,

@@ -205,7 +205,7 @@ def run_league_training(
     if first_scripted is None:
         raise ValueError(
             "initial_pool must contain at least one scripted member to host the "
-            "round-0 PPO constructor; the F5-A seeded pool provides this"
+            "round-0 PPO constructor; the seeded pool provides this"
         )
 
     # A throw-away distribution that always returns the first scripted

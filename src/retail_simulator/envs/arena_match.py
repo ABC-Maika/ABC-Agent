@@ -31,7 +31,7 @@ from retail_simulator.envs.gym_env import mask_expansion_logits
 from retail_simulator.envs.ladder import _materialize_predicts
 from retail_simulator.envs.parallel_env import RetailParallelEnv
 
-# The levers every consumer records, in the order the study's CSV writes them;
+# The levers every consumer records, in the order the CSV writes them;
 # re-exported by scripts/arena_competition.py so its CLI contract is unchanged.
 LOGGED_LEVERS: tuple[str, ...] = (
     "price_index",

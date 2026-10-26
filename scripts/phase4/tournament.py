@@ -206,7 +206,7 @@ def _summary_payload(
             "calibrated_spike_config"
             if env == "calibrated"
             else (
-                "arena_lock_config (candidate lock, RLB-8a)"
+                "arena_lock_config (candidate lock)"
                 if env == "arena"
                 else "arena_balanced_config (credit-line-and-rebalance: working-"
                 "capital credit line + smaller warehouse footprint)"

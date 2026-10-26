@@ -129,55 +129,55 @@ def _build_parser() -> argparse.ArgumentParser:
         "--overhead-reference-stores",
         type=float,
         default=None,
-        help="wage.overhead_reference_stores, the growth-overhead footprint-span brake (K-arm-overhead-5, re-tuned by the v4 promotion-combo re-tune) — overrides the CHOSEN world's own value in place; distinct from --overhead above, which builds an entirely different world and stays incompatible with --balanced. Replays an archived --balanced standing recorded before arena_balanced_config's own default first moved to 5.0, e.g. --balanced --overhead-reference-stores 7.15, or before it was re-tuned to 4.5, e.g. --balanced --overhead-reference-stores 5.0",
+        help="wage.overhead_reference_stores, the growth-overhead footprint-span brake — overrides the CHOSEN world's own value in place; distinct from --overhead above, which builds an entirely different world and stays incompatible with --balanced",
     )
     brakes.add_argument(
         "--restructure-after-ticks",
         type=int,
         default=None,
-        help="wage.restructure_after_ticks (Phase 4 MECHANIC 4, RESTRUCTURING — the zombie-seat recovery path, decision 7): consecutive ticks a seat's cash must stay below -(credit_limit + restructure_debt_threshold) before it is restructured; 0 turns the rule off; default: inherit the chosen world's own value (0, off, for the lock; the balanced world arms it at 50 since 2026-09-18); pass 0 to replay a --balanced standing recorded before that date",
+        help="wage.restructure_after_ticks (RESTRUCTURING — the insolvent-seat recovery path): consecutive ticks a seat's cash must stay below -(credit_limit + restructure_debt_threshold) before it is restructured; 0 turns the rule off; default: inherit the chosen world's own value (0, off, for the lock; the balanced world arms it at 50); pass 0 to turn the rule off",
     )
     brakes.add_argument(
         "--restructure-keep-stores",
         type=int,
         default=None,
-        help="wage.restructure_keep_stores: how many of the seat's best regions (by market share) survive a restructuring; default: inherit the chosen world's own value (1 for the lock, 3 for --balanced since 2026-09-18)",
+        help="wage.restructure_keep_stores: how many of the seat's best regions (by market share) survive a restructuring; default: inherit the chosen world's own value (1 for the lock, 3 for --balanced)",
     )
     brakes.add_argument(
         "--max-share-per-region",
         type=float,
         default=None,
-        help="demand.max_share_per_region (Phase 4 MECHANIC 5, REGIONAL SHARE CEILING -- the anti-concentration brake, decision 9): the maximum per-region choice share any one present retailer may hold; the excess flows to the region's other present, uncapped retailers, and whatever nobody present can absorb goes unserved; default: inherit the chosen world's own value (1.0, off, for both the lock and --balanced -- shipped inert pending a calibration sweep)",
+        help="demand.max_share_per_region (REGIONAL SHARE CEILING -- the anti-concentration brake): the maximum per-region choice share any one present retailer may hold; the excess flows to the region's other present, uncapped retailers, and whatever nobody present can absorb goes unserved; default: inherit the chosen world's own value (1.0, off, for the lock; 0.6 for --balanced)",
     )
     brakes.add_argument(
         "--marketing-cost-exponent",
         type=float,
         default=None,
-        help="marketing.marketing_cost_exponent (MECHANIC 6 candidate, CONVEX MARKETING COST — a dueling experiment): raises spend_fraction to this power before pricing it, so a high spend costs disproportionately more at the margin; default: inherit the chosen world's own value (1.0, linear/off, for both the lock and --balanced -- NOT armed by this task)",
+        help="marketing.marketing_cost_exponent (CONVEX MARKETING COST): raises spend_fraction to this power before pricing it, so a high spend costs disproportionately more at the margin; default: inherit the chosen world's own value (1.0, linear/off, for both the lock and --balanced)",
     )
     brakes.add_argument(
         "--promotion-contest-weight",
         type=float,
         default=None,
-        help="promotion.promotion_contest_weight (MECHANIC-6b candidate, PROMOTION CONTEST — a dueling experiment): nets each retailer's promotion against its present rivals' mean promotion before the utility reads it, so out-promoting rivals steals share and a matched raid cancels; default: inherit the chosen world's own value (0.0, absolute/off, for the lock; 1.0, armed, for --balanced since K-arm-v4-promotion-combo); pass 0.0 to reproduce a --balanced standing recorded before that",
+        help="promotion.promotion_contest_weight (PROMOTION CONTEST): nets each retailer's promotion against its present rivals' mean promotion before the utility reads it, so out-promoting rivals steals share and a matched raid cancels; default: inherit the chosen world's own value (0.0, absolute/off, for the lock; 1.0, armed, for --balanced); pass 0.0 to turn the contest off",
     )
     brakes.add_argument(
         "--promo-cost-per-unit",
         type=float,
         default=None,
-        help="promotion.promo_cost_per_unit (promotion combo #2b, -- the calibration partner to --promotion-contest-weight): default: inherit the chosen world's own value (0.009, the class default, for the lock; 0.0, armed, for --balanced since K-arm-v4-promotion-combo); pass 0.009 to reproduce a --balanced standing recorded before that",
+        help="promotion.promo_cost_per_unit (the calibration partner to --promotion-contest-weight): default: inherit the chosen world's own value (0.009, the class default, for the lock; 0.0, armed, for --balanced); pass 0.009 to restore the class default",
     )
     brakes.add_argument(
         "--stockpile-build",
         type=float,
         default=None,
-        help="promotion.stockpile_build (promotion combo #2b): default: inherit the chosen world's own value (0.17, the class default, for the lock; 0.0, armed, for --balanced since K-arm-v4-promotion-combo); pass 0.17 to reproduce a --balanced standing recorded before that",
+        help="promotion.stockpile_build: default: inherit the chosen world's own value (0.17, the class default, for the lock; 0.0, armed, for --balanced); pass 0.17 to restore the class default",
     )
     brakes.add_argument(
         "--stockpile-decay",
         type=float,
         default=None,
-        help="promotion.stockpile_decay (promotion combo #2b): default: inherit the chosen world's own value (0.7, the class default, for both the lock and --balanced -- NOT armed by this task)",
+        help="promotion.stockpile_decay: default: inherit the chosen world's own value (0.7, the class default, for both the lock and --balanced)",
     )
     return parser
 

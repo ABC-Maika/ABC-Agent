@@ -47,14 +47,14 @@ app.add_typer(competition_app, name="competition")
 league_app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
-    help="Phase 1.5 self-play tooling — league train|evaluate|generalization-diagnostic.",
+    help="Self-play tooling — league train|evaluate|generalization-diagnostic.",
 )
 app.add_typer(league_app, name="league")
 
 live_app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
-    help="Phase 2.0 demo server — live multiplayer over WebSocket.",
+    help="Demo server — live multiplayer over WebSocket.",
 )
 app.add_typer(live_app, name="live")
 

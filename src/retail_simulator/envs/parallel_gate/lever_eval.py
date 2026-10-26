@@ -201,7 +201,7 @@ def evaluate_scm_on_vs_off(
 
     if n_learning_agents < 2:
         raise ValueError(
-            f"""evaluate_scm_on_vs_off requires n_learning_agents >= 2 (got {n_learning_agents}): the position-controlled rotation puts every OTHER seat in the scm-off role, which is empty (⇒ silent NaN mean) at n=1. Phase 1.1 calls for the single-agent vs Discounter substrate; the current implementation uses n=2 + Discounter as a close equivalent (SCM is first-order competitor-independent). A literal n=1 path would compare two separate rollouts (same trained model, action unchanged vs scm_force_default_action'd) — that is a Phase 1.x follow-up runner, not this function."""
+            f"""evaluate_scm_on_vs_off requires n_learning_agents >= 2 (got {n_learning_agents}): the position-controlled rotation puts every OTHER seat in the scm-off role, which is empty (⇒ silent NaN mean) at n=1. The ideal substrate is single-agent vs Discounter; the current implementation uses n=2 + Discounter as a close equivalent (SCM is first-order competitor-independent). A literal n=1 path would compare two separate rollouts (same trained model, action unchanged vs scm_force_default_action'd) — that is a separate follow-up runner, not this function."""
         )
     cfg = config.reward
     env = RetailParallelEnv(
@@ -306,7 +306,7 @@ def evaluate_automation_on_vs_off(
 
     if n_learning_agents < 2:
         raise ValueError(
-            f"""evaluate_automation_on_vs_off requires n_learning_agents >= 2 (got {n_learning_agents}): the position-controlled rotation puts every OTHER seat in the automation-off role, which is empty (⇒ silent NaN mean) at n=1. Phase 1.2 calls for the single-agent vs Discounter substrate; the current implementation uses n=2 + Discounter as a close equivalent (automation is first-order competitor-independent, — identical to SCM's structure). A literal n=1 path would compare two separate rollouts (same trained model, action unchanged vs automation_force_default_action'd) — that is a Phase 1.x follow-up runner, not this function."""
+            f"""evaluate_automation_on_vs_off requires n_learning_agents >= 2 (got {n_learning_agents}): the position-controlled rotation puts every OTHER seat in the automation-off role, which is empty (⇒ silent NaN mean) at n=1. The ideal substrate is single-agent vs Discounter; the current implementation uses n=2 + Discounter as a close equivalent (automation is first-order competitor-independent, — identical to SCM's structure). A literal n=1 path would compare two separate rollouts (same trained model, action unchanged vs automation_force_default_action'd) — that is a separate follow-up runner, not this function."""
         )
     cfg = config.reward
     env = RetailParallelEnv(
@@ -410,7 +410,7 @@ def evaluate_loyalty_on_vs_off(
 
     if n_learning_agents < 2:
         raise ValueError(
-            f"""evaluate_loyalty_on_vs_off requires n_learning_agents >= 2 (got {n_learning_agents}): the position-controlled rotation puts every OTHER seat in the loyalty-off role, which is empty (⇒ silent NaN mean) at n=1. Phase 1.3 calls for the single-agent vs Discounter substrate; the current implementation uses n=2 + Discounter as a close equivalent (loyalty is first-order competitor-independent, — identical to SCM / automation). A literal n=1 path would compare two separate rollouts (same trained model, action unchanged vs loyalty_force_default_action'd) — that is a Phase 1.x follow-up runner, not this function."""
+            f"""evaluate_loyalty_on_vs_off requires n_learning_agents >= 2 (got {n_learning_agents}): the position-controlled rotation puts every OTHER seat in the loyalty-off role, which is empty (⇒ silent NaN mean) at n=1. The ideal substrate is single-agent vs Discounter; the current implementation uses n=2 + Discounter as a close equivalent (loyalty is first-order competitor-independent, — identical to SCM / automation). A literal n=1 path would compare two separate rollouts (same trained model, action unchanged vs loyalty_force_default_action'd) — that is a separate follow-up runner, not this function."""
         )
     cfg = config.reward
     env = RetailParallelEnv(
