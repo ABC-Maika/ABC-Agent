@@ -9,7 +9,7 @@ import logging
 import zipfile
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -19,11 +19,23 @@ from retail_simulator.envs.spike_archetypes import ArchetypePredict, calibrated_
 
 from .model import parse_participant_spec
 
+if TYPE_CHECKING:
+    from retail_simulator.envs.league.pool import PolicyKind
+
 logger = logging.getLogger(__name__)
 
+# First match wins. PPO and A2C (ActorCriticPolicy) match none and fall through to "mlp";
+# DDPG saves TD3Policy, so it is detected as "td3".
+_POLICY_KIND_MARKERS: tuple[tuple[tuple[bytes, ...], PolicyKind], ...] = (
+    ((b"Recurrent", b"recurrent"), "lstm"),
+    ((b"TQCPolicy", b".tqc."), "tqc"),
+    ((b"SACPolicy", b".sac."), "sac"),
+    ((b"TD3Policy", b".td3."), "td3"),
+)
 
-def _detect_policy_kind(checkpoint_path: str | Path) -> Literal["mlp", "lstm"]:
-    """Peek a checkpoint zip and return "mlp" or "lstm" from its serialized policy."""
+
+def _detect_policy_kind(checkpoint_path: str | Path) -> PolicyKind:
+    """Peek a checkpoint zip and return the loader kind from its serialized policy class."""
     try:
         with zipfile.ZipFile(checkpoint_path) as zf, zf.open("data") as data_member:
             data = json.load(data_member)
@@ -36,7 +48,7 @@ def _detect_policy_kind(checkpoint_path: str | Path) -> Literal["mlp", "lstm"]:
         ValueError,
         json.JSONDecodeError,
     ) as exc:
-        # Peek failed: default to "mlp" and warn so a demoted LSTM stays visible.
+        # Peek failed: default to "mlp" and warn so a demoted non-PPO policy stays visible.
         logger.warning(
             "policy-kind auto-detect peek failed for %s (%s: %s); defaulting to 'mlp'",
             checkpoint_path,
@@ -44,8 +56,9 @@ def _detect_policy_kind(checkpoint_path: str | Path) -> Literal["mlp", "lstm"]:
             exc,
         )
         return "mlp"
-    if b"recurrent" in decoded or b"sb3_contrib" in decoded:
-        return "lstm"
+    for markers, kind in _POLICY_KIND_MARKERS:
+        if any(marker in decoded for marker in markers):
+            return kind
     return "mlp"
 
 

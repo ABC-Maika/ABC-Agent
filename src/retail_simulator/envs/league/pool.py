@@ -17,7 +17,7 @@ import tempfile
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, get_args
 
 import numpy as np
 
@@ -61,6 +61,12 @@ _SCRIPTED_ROUND_INDEX: int = -1
 # names a core NPC archetype; "archetype" is a fixed calibrated posture.
 PoolMemberKind = Literal["scripted", "checkpoint", "archetype"]
 
+# SB3 class a checkpoint zip is loaded with. A2C loads as "mlp" (PPO) and DDPG as "td3":
+# the saved policy class and the deterministic inference are identical.
+PolicyKind = Literal["mlp", "lstm", "sac", "td3", "tqc"]
+_POLICY_KINDS: tuple[str, ...] = get_args(PolicyKind)
+
+
 @dataclass(frozen=True)
 class PoolMember:
     """One league participant: scripted NPC, trained checkpoint, or fixed archetype."""
@@ -70,17 +76,16 @@ class PoolMember:
     archetype_name: str
     checkpoint_path: Path | None
     round_index: int
-    policy_kind: Literal["mlp", "lstm"] = "mlp"
+    policy_kind: PolicyKind = "mlp"
 
     def __post_init__(self) -> None:
         if not self.member_id:
             raise ValueError("PoolMember.member_id must be non-empty")
-        # Validate policy_kind at the boundary: "mlp" (default) and "lstm"
-        # are legal; anything else is a programming error.
-        if self.policy_kind not in ("mlp", "lstm"):
+        # Validate policy_kind at the boundary: anything outside PolicyKind is a programming error.
+        if self.policy_kind not in _POLICY_KINDS:
             raise ValueError(
-                f"PoolMember {self.member_id!r} policy_kind must be 'mlp' or 'lstm'; "
-                f"got {self.policy_kind!r}"
+                f"PoolMember {self.member_id!r} policy_kind must be one of "
+                f"{_POLICY_KINDS}; got {self.policy_kind!r}"
             )
         if self.kind == "scripted":
             if self.checkpoint_path is not None:
@@ -181,6 +186,37 @@ class PoolMember:
             round_index=int(round_index),
             policy_kind=policy_kind_raw,
         )
+
+
+def _load_checkpoint_model(member_id: str, policy_kind: PolicyKind, path: Path) -> Any:
+    """Load the checkpoint zip at ``path`` with the SB3 class that ``policy_kind`` names."""
+    if policy_kind in ("lstm", "tqc"):
+        # Lazy sb3-contrib import: importing this module without the [recurrent]
+        # extra still succeeds; the ImportError surfaces only when such a
+        # checkpoint is materialized.
+        try:
+            from sb3_contrib import TQC, RecurrentPPO  # lazy by design
+        except ImportError as exc:  # pragma: no cover - exercised when extra missing
+            raise ImportError(
+                f"materializing PoolMember {member_id!r} with policy_kind={policy_kind!r} "
+                f"requires sb3-contrib; install with: pip install 'retail-simulator[recurrent]' "
+                f"(or: pip install 'sb3-contrib>=2.3,<3.0')"
+            ) from exc
+        if policy_kind == "lstm":
+            return RecurrentPPO.load(path)
+        return TQC.load(path)
+    if policy_kind == "sac":
+        from stable_baselines3 import SAC  # lazy by design
+
+        return SAC.load(path)
+    if policy_kind == "td3":
+        from stable_baselines3 import TD3  # lazy by design
+
+        return TD3.load(path)
+    from stable_baselines3 import PPO  # lazy by design
+
+    return PPO.load(path)
+
 
 class FrozenPolicyPool:
     """Ordered collection of :class:`PoolMember` values — the league's opponent set.
@@ -358,15 +394,16 @@ class FrozenPolicyPool:
         round_index: int,
         *,
         seed: int,
-        policy_kind: Literal["mlp", "lstm"] = "mlp",
+        policy_kind: PolicyKind = "mlp",
     ) -> PoolMember:
         """Save ``model`` to ``{pool_dir}/round_{round_index}.zip``, append a checkpoint member, persist the manifest atomically.
 
         The seed participates only in the member_id naming — a provenance handle, not
         an RNG draw. The checkpoint is saved BEFORE the manifest is rewritten, so a
         crash between leaves an orphan zip (recoverable) rather than a manifest
-        pointing at a missing zip. ``policy_kind`` is the caller's word ("mlp" or
-        "lstm"); it selects the closure shape at :meth:`materialize` time.
+        pointing at a missing zip. ``policy_kind`` is the caller's word (a
+        :data:`PolicyKind`); it selects the loader and closure shape at :meth:`materialize`
+        time.
         """
         relative_path = Path(f"round_{round_index}.zip")
         # PPO.save accepts str or PathLike; pass the absolute path.
@@ -521,39 +558,20 @@ class FrozenPolicyPool:
                     f"checkpoint PoolMember {member.member_id!r} has no checkpoint_path; "
                     f"the dataclass invariant was bypassed"
                 )
-            if member.policy_kind == "lstm":
-                # Lazy sb3-contrib import: importing this module without the
-                # [recurrent] extra still succeeds; the ImportError names the
-                # extra and surfaces only when an LSTM checkpoint is materialized.
-                try:
-                    from sb3_contrib import RecurrentPPO  # lazy by design
-                except ImportError as exc:  # pragma: no cover - exercised when extra missing
-                    raise ImportError(
-                        f"materializing PoolMember {member.member_id!r} with "
-                        f"policy_kind='lstm' requires the [recurrent] extra; "
-                        f"install with: pip install 'retail-simulator[recurrent]' "
-                        f"(or: pip install sb3-contrib>=2.3,<3.0)"
-                    ) from exc
-                self._materialize_cache[member.member_id] = RecurrentPPO.load(
-                    self._pool_dir / member.checkpoint_path
-                )
-            else:
-                from stable_baselines3 import PPO  # lazy by design
-
-                self._materialize_cache[member.member_id] = PPO.load(
-                    self._pool_dir / member.checkpoint_path
-                )
+            self._materialize_cache[member.member_id] = _load_checkpoint_model(
+                member.member_id, member.policy_kind, self._pool_dir / member.checkpoint_path
+            )
         loaded_model = self._materialize_cache[member.member_id]
 
-        if member.policy_kind == "mlp":
+        if member.policy_kind != "lstm":
 
-            def _checkpoint_predict_mlp(obs: Any, **_kwargs: Any) -> Any:
-                # **_kwargs absorbs the episode_start kwarg; MLP has no
-                # recurrent state, so it is accepted and ignored.
+            def _checkpoint_predict_feedforward(obs: Any, **_kwargs: Any) -> Any:
+                # **_kwargs absorbs the episode_start kwarg; feedforward policies
+                # carry no recurrent state, so it is accepted and ignored.
                 action, _state = loaded_model.predict(obs, deterministic=True)
                 return action
 
-            return _checkpoint_predict_mlp
+            return _checkpoint_predict_feedforward
 
         # LSTM branch — the closure carries lstm_states across calls and
         # resets them when episode_start=True (closure-local 1-element list).
