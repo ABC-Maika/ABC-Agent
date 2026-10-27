@@ -7,6 +7,12 @@ world's tuning are intentionally not included.
 
 ## Setup
 
+Use Python 3.11 or 3.12. Python 3.13 and newer are not supported: `numpy<2.0`
+publishes no prebuilt wheels for them, so pip stops with
+`No matching distribution found for numpy` or has to compile numpy from source.
+If `python3` is newer than 3.12, create the environment with
+`python3.12 -m venv .venv` instead.
+
 ```bash
 git clone https://github.com/pencho-dobrev/retail-simulator-arena.git
 cd retail-simulator-arena
@@ -28,6 +34,17 @@ your own machine until you submit one.
 Always train in the balanced world (`--world balanced`) — that is the world
 the competition is played in.
 
+`--rounds N` writes `round_0.zip` through `round_{N-1}.zip`. `round_0.zip` is
+the untrained, randomly initialised snapshot, not a trained agent, so train with
+`--rounds 2` or more. The checkpoint to use is the last one: `round_5.zip` at the
+default of 6 rounds.
+
+Rounds grow the pool of opponents the next round trains against; they do not add
+training steps to a checkpoint. Each round trains a fresh policy from scratch
+for `--train-steps-per-round` steps (default 300,000), so a checkpoint's
+training budget is that number, not rounds times steps. With `--warm-start`,
+round 2 onward continues from the previous round's checkpoint instead.
+
 Three reference recipes — they differ by objective, not by seed:
 
 ```bash
@@ -42,6 +59,15 @@ python scripts/arena_train_player.py my_margin --world balanced --seeds 0,0,42
 python scripts/arena_train_player.py my_share --world balanced \
     --reward weighted --seeds 1,1,43
 ```
+
+Training with your own loop or another algorithm? Seed Stable-Baselines3 with
+`stable_baselines3.common.utils.set_random_seed(seed)`, not the `seed=` argument.
+The vector environment SuperSuit builds has no `seed()` method, so
+`PPO("MlpPolicy", venv, seed=0)` raises
+`AttributeError: 'ConcatVecEnv' object has no attribute 'seed'`, with every
+SuperSuit version this repo installs. `build_parallel_vec_env` in
+`retail_simulator.envs.parallel_gate.bridge` builds the vector environment the
+arena trainer uses.
 
 ## Self-check
 
