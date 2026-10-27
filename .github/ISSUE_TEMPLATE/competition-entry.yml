@@ -10,9 +10,9 @@ body:
         `.zip` (produced by `model.save(...)`) by dragging it into the **Checkpoint**
         field below. See the README for how the entry is trained, self-checked, and scored.
         Final scoring is a tournament among the entries, with no NPCs: entrants are grouped
-        into matches of up to six, rotated across opponents and home regions, and ranked by
-        aggregate profit, on an undisclosed seed and home rotations. The self-check against
-        the NPC field is local practice only.
+        into matches of up to six, with seats, home regions and (in larger fields) groups
+        rotated across several matches, and ranked by aggregate profit, on an undisclosed
+        seed and home rotations. The self-check against the NPC field is local practice only.
   - type: input
     id: team
     attributes:

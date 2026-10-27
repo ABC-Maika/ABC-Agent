@@ -88,12 +88,12 @@ Two things hold for every algorithm:
 The world is fixed — `arena_balanced_config()`, not competitor-chosen.
 
 > **Final scoring is a tournament among the entries — there are no NPCs in
-> it.** The organizer groups all entrants into matches of up to six seats and
-> rotates the groups, the seats and the home regions across several matches, so
-> every entrant meets varied opponents and starts from varied regions. Every
-> entrant plays the same number of matches, and entrants are ranked by their
-> aggregate `total_profit` across them. The seed and the home rotations are
-> undisclosed.
+> it.** The organizer groups all entrants into matches of up to six seats.
+> Across several matches the groups are re-drawn (when there are more than six
+> entrants) and the seats and home regions are rotated, so a rank does not rest
+> on a single seating or a single starting region. Every entrant plays the same
+> number of matches, and entrants are ranked by their aggregate `total_profit`
+> across them. The seed and the home rotations are undisclosed.
 
 The self-check above is local practice and is not how finals are scored: the
 opponents at final scoring are the other entries, so a strong result against the
