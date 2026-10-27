@@ -46,7 +46,8 @@ python scripts/arena_train_player.py my_share --world balanced \
 ## Self-check
 
 Seat your checkpoint against the NPC field with
-`scripts/arena_competition.py` and play a full match:
+`scripts/arena_competition.py` and play a full match. This is practice, not how
+finals are scored (see [Rules](#rules)).
 
 ```bash
 python scripts/arena_competition.py --balanced --rounds 1000 \
@@ -86,8 +87,18 @@ Two things hold for every algorithm:
 
 The world is fixed — `arena_balanced_config()`, not competitor-chosen.
 
-> **Final scoring is run by the organizer on undisclosed seeds and home
-> rotations.** The published home rotation is `1, 5, 9, 13, 17, 21` and the
-> tools default to `--seed 0`, but an agent tuned to a fixed seed or a fixed
-> set of starting regions will not necessarily score well. Train for
-> robustness across seeds and starting regions.
+> **Final scoring is a tournament among the entries — there are no NPCs in
+> it.** The organizer groups all entrants into matches of up to six seats and
+> rotates the groups, the seats and the home regions across several matches, so
+> every entrant meets varied opponents and starts from varied regions. Every
+> entrant plays the same number of matches, and entrants are ranked by their
+> aggregate `total_profit` across them. The seed and the home rotations are
+> undisclosed.
+
+The self-check above is local practice and is not how finals are scored: the
+opponents at final scoring are the other entries, so a strong result against the
+NPC field is not a prediction of your rank. The published home rotation is
+`1, 5, 9, 13, 17, 21` and the tools default to `--seed 0`, but an agent tuned to a
+fixed seed, a fixed set of starting regions or a fixed set of opponents will not
+necessarily score well. Train for robustness across seeds, starting regions and
+opponents.
