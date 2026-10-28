@@ -1,0 +1,8 @@
+{
+  "team": "TODO-team-name",
+  "agent_name": "Jack",
+  "policy_kind": "recurrent-ppo-lstm",
+  "contact": "orlinss2008@gmail.com",
+  "training_recipe": "agents/misho/jack/train.py jack --steps 20000 (RecurrentPPO, six-seat match vs five archetype NPCs, profit reward, expansion masking)",
+  "sb3_version": "2.9.2"
+}
