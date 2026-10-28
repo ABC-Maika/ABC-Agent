@@ -3,6 +3,6 @@
   "agent_name": "orcho-a2c",
   "policy_kind": "a2c-mlp",
   "contact": "TODO: contact",
-  "training_recipe": "scripts/clone_recipe.py (imitation of the scripted orcho-recipe: max price and marketing, wage_spend 0.5, stop expanding at 10 stores; 8 recorded matches + 3 DAgger rounds, A2C MlpPolicy 256x256)",
+  "training_recipe": "scripts/clone_recipe.py --expert orcho-recipe2 --see employee_happiness (imitation of the scripted recipe: biggest-demand regions first up to 12 stores, price 2.0, marketing 1.0, research 0.2, staff pay 0.45 raised up to 1.0 when staff happiness drops; 8 recorded matches + 3 DAgger rounds, A2C MlpPolicy 256x256)",
   "sb3_version": "2.9.2"
 }

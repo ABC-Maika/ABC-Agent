@@ -27,7 +27,7 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv
 from train_vs_npcs import NpcFieldEnv
 
-EXPERT = "orcho-recipe"
+EXPERT = "orcho-recipe"  # overridden by --expert
 
 
 EXPANSION = slice(4, 36)  # the 32 expansion logits in the 44-wide action vector
@@ -89,19 +89,24 @@ def fit(policy: Any, x: torch.Tensor, y: torch.Tensor, epochs: int) -> float:
 def main() -> int:
     register()
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--expert", default="orcho-recipe", help="scripted recipe to copy")
     parser.add_argument("--episodes", type=int, default=8)
     parser.add_argument("--ticks", type=int, default=1000)
     parser.add_argument("--epochs", type=int, default=40)
     parser.add_argument("--dagger-rounds", type=int, default=3)
     parser.add_argument("--dagger-episodes", type=int, default=6)
+    parser.add_argument("--see", action="append", default=[], help="extra observation the recipe reads")
     parser.add_argument("--out", type=Path, default=Path("runs/mkt/orcho-a2c-clone.zip"))
     args = parser.parse_args()
 
+    global EXPERT
+    EXPERT = args.expert
     x, y = collect(args.episodes, args.ticks, 0)
     # The recipe reads only the seat's own store counts. Feeding the network anything else lets it
     # lean on features (rival blocks) that look different when the rivals are trained agents.
     names = geo._name_to_index(25)
     relevant = [names["stores"]] + [names[f"stores_region_{r}"] for r in range(1, 25)]
+    relevant += [names[n] for n in args.see]
     keep = np.zeros(x.shape[1], dtype=np.float32)
     keep[relevant] = 1.0
     scale = np.maximum(np.abs(x).max(axis=0), 1.0).astype(np.float32)

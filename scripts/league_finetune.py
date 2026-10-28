@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +27,7 @@ import torch
 from aggressive_npcs import register
 from stable_baselines3 import A2C
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecNormalize
 from train_vs_npcs import HAPPINESS_BONUS
 
 from retail_simulator.core.encoding import encode_action
@@ -95,6 +97,7 @@ def random_recipe(rng: random.Random, n_regions: int, idx: dict[str, int]) -> An
 class LeagueEnv(gym.Env):
     def __init__(self, seed: int, scale: np.ndarray, ticks: int = 1000) -> None:
         super().__init__()
+        register()  # also needed inside spawned worker processes
         self.np_random, _ = gym.utils.seeding.np_random(seed)
         self.config = arena_balanced_config()
         self.scale, self.ticks = scale.astype(np.float32), ticks
@@ -155,6 +158,14 @@ class LeagueEnv(gym.Env):
         return obs0, reward, False, self.t >= self.ticks, {}
 
 
+def make_env(seed: int, scale: np.ndarray) -> Monitor:
+    return Monitor(LeagueEnv(seed, scale))
+
+
+# Registry defaults of the continuous levers (action index -> default): a neutral starting point.
+DEFAULTS = {0: 1.0, 1: 0.0, 2: 0.0, 3: 0.0, 36: 0.0, 37: 1.0, 41: 0.0, 42: 0.0, 43: 0.0}
+
+
 def main() -> int:
     register()
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -163,6 +174,8 @@ def main() -> int:
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--std", type=float, default=0.135, help="exploration noise (action std)")
     parser.add_argument("--n-envs", type=int, default=4)
+    parser.add_argument("--scratch", action="store_true", help="no clone: a fresh network, all inputs open")
+    parser.add_argument("--subproc", action="store_true", help="one worker process per environment")
     parser.add_argument("--out", type=Path, default=Path("runs/league/orcho-a2c-ft.zip"))
     args = parser.parse_args()
 
@@ -175,36 +188,56 @@ def main() -> int:
         seen.append(obs)
     scale = np.maximum(np.abs(np.asarray(seen)).max(axis=0), 1.0)
 
+    env_cls = SubprocVecEnv if args.subproc else DummyVecEnv
     venv = VecNormalize(
-        DummyVecEnv([lambda s=s: Monitor(LeagueEnv(s, scale)) for s in range(args.n_envs)]),
+        env_cls([partial(make_env, seed, scale) for seed in range(args.n_envs)]),
         norm_obs=False,
         norm_reward=True,
     )
-    model = A2C.load(
-        args.start,
-        env=venv,
-        device="cpu",
-        custom_objects={"learning_rate": args.lr, "lr_schedule": lambda _: args.lr},
-    )
-    # Un-fold the clone's scale so training sees obs/scale, and open the inputs the clone ignored.
-    names = geo._name_to_index(25)
-    relevant = [names["stores"]] + [names[f"stores_region_{r}"] for r in range(1, 25)]
-    closed = np.ones(318, dtype=bool)
-    closed[relevant] = False
-    closed_t = torch.as_tensor(closed)
-    with torch.no_grad():
-        for seq in (model.policy.mlp_extractor.policy_net, model.policy.mlp_extractor.value_net):
-            w = seq[0].weight
-            w *= torch.as_tensor(scale, dtype=w.dtype)[None, :]
-            w[:, closed_t] = torch.randn_like(w)[:, closed_t] * 0.01
-        model.policy.log_std.fill_(float(np.log(args.std)))
+    if args.scratch:
+        model = A2C(
+            "MlpPolicy",
+            venv,
+            learning_rate=args.lr,
+            ent_coef=0.0,
+            verbose=1,
+            device="cpu",
+            policy_kwargs={
+                "net_arch": {"pi": [256, 256], "vf": [256, 256]},
+                "log_std_init": math.log(args.std),
+            },
+        )
+        with torch.no_grad():
+            model.policy.action_net.bias.zero_()
+            for dim, value in DEFAULTS.items():
+                model.policy.action_net.bias[dim] = value
+    else:
+        model = A2C.load(
+            args.start,
+            env=venv,
+            device="cpu",
+            custom_objects={"learning_rate": args.lr, "lr_schedule": lambda _: args.lr},
+        )
+        # Un-fold the clone's scale so training sees obs/scale, and open the inputs it ignored.
+        names = geo._name_to_index(25)
+        relevant = [names["stores"]] + [names[f"stores_region_{r}"] for r in range(1, 25)]
+        closed = np.ones(318, dtype=bool)
+        closed[relevant] = False
+        closed_t = torch.as_tensor(closed)
+        with torch.no_grad():
+            for seq in (model.policy.mlp_extractor.policy_net, model.policy.mlp_extractor.value_net):
+                w = seq[0].weight
+                w *= torch.as_tensor(scale, dtype=w.dtype)[None, :]
+                w[:, closed_t] = torch.randn_like(w)[:, closed_t] * 0.01
+            model.policy.log_std.fill_(float(np.log(args.std)))
     model.learn(total_timesteps=args.steps)
     with torch.no_grad():
         for seq in (model.policy.mlp_extractor.policy_net, model.policy.mlp_extractor.value_net):
             seq[0].weight /= torch.as_tensor(scale, dtype=seq[0].weight.dtype)[None, :]
     args.out.parent.mkdir(parents=True, exist_ok=True)
     model.save(args.out)
-    meta = {"algo": "a2c", "reward": "league", "steps": args.steps, "seed": 0, "ent_coef": 0.0}
+    meta = {"algo": "a2c", "reward": "league", "steps": args.steps, "seed": 0, "ent_coef": 0.0,
+            "start": "scratch" if args.scratch else "clone"}
     args.out.with_suffix(".json").write_text(json.dumps(meta) + "\n")
     print(f"saved {args.out}")
     return 0
