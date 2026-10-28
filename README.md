@@ -132,6 +132,17 @@ Four traps to know about:
   trajectory. To get independent copies, build each environment yourself with
   its own seed.
 
+### Example: train against the NPC field
+
+`scripts/train_vs_npcs.py` is a short, readable example of your own training loop.
+One learning seat plays the four NPCs from the self-check, with home regions
+shuffled and a new world seed every episode, for PPO, RecurrentPPO or SAC. It is a
+starting point to read and change, not a tuned entry.
+
+```bash
+python scripts/train_vs_npcs.py my_ppo --algo ppo --steps 300000 --out runs/my_ppo.zip
+```
+
 ## Self-check
 
 Seat your checkpoint against the NPC field with
