@@ -1,1 +1,1 @@
-{"algo": "a2c", "reward": "imitation", "steps": 26000, "seed": 0, "ent_coef": 0.0, "expert": "orcho-recipe2"}
+{"algo": "a2c", "reward": "imitation", "steps": 26000, "seed": 0, "ent_coef": 0.0, "expert": "orcho-recipe2 + smart pay"}
