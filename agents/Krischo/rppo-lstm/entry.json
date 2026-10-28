@@ -1,0 +1,8 @@
+{
+  "team": "TODO: team name",
+  "agent_name": "Krischo",
+  "policy_kind": "recurrent-ppo-lstm",
+  "contact": "TODO: contact",
+  "training_recipe": "agents/Krischo/scripts/*: parametric rule-based expert found by search and league play against smarter opponents (krischo_optimize.py, krischo_league.py), distilled into a RecurrentPPO MlpLstmPolicy by behaviour cloning + 3 DAgger rounds, then 280k steps of RecurrentPPO fine-tuning on profit against the league (krischo_rl.py); observation scale folded into the LSTM input weights, six-seat matches, expansion masking",
+  "sb3_version": "2.9.2"
+}
