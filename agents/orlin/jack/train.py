@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -38,7 +39,6 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecEnv, VecNormalize  
 
 
 N_SEATS = 6  # a full match: Jack plus five opponents, one per published metro home
-base.N_SEATS = N_SEATS  # NpcFieldEnv.reset reads this module global when it builds the world
 
 
 class SixSeatEnv(base.NpcFieldEnv):
@@ -60,13 +60,44 @@ class SixSeatEnv(base.NpcFieldEnv):
 
 
 def make_env_fns(args: argparse.Namespace) -> list[Callable[[], Any]]:
-    """One six-seat env per copy, each with its own seed (cloning one env would repeat worlds)."""
+    """One env per copy, each with its own seed (cloning one env would repeat worlds).
+
+    ``--env given`` is the example env from ``train_vs_npcs.py`` untouched (5 seats, 4 NPCs);
+    ``--env six`` is the six-seat variant above.
+    """
     seeds = [
         int(s.generate_state(1)[0]) for s in np.random.SeedSequence(args.seed).spawn(args.n_envs)
     ]
-    return [
-        lambda s=s: Monitor(SixSeatEnv(s, episode_ticks=args.episode_ticks)) for s in seeds
-    ]
+    if args.env == "given":
+        base.N_SEATS = 1 + len(base.NPC_FIELD)
+        env_cls: type[base.NpcFieldEnv] = base.NpcFieldEnv
+    else:
+        base.N_SEATS = N_SEATS  # NpcFieldEnv.reset reads this module global to build the world
+        env_cls = SixSeatEnv
+    return [lambda s=s: Monitor(_with_reward(env_cls(s, episode_ticks=args.episode_ticks), args))
+            for s in seeds]
+
+
+def _with_reward(env: base.NpcFieldEnv, args: argparse.Namespace) -> base.NpcFieldEnv:
+    """Train on a weighted reward (profit, revenue, market share, loyalty) instead of profit.
+
+    The world z-normalizes each component for learning seats and returns the weighted sum, so
+    the number the learner sees is not in currency units. Scoring is still profit.
+    """
+    if args.reward_weights is not None:
+        profit, revenue, share, loyalty = args.reward_weights
+        env._config = replace(
+            env._config,
+            reward=replace(
+                env._config.reward,
+                mode="weighted",
+                weight_profit=profit,
+                weight_revenue=revenue,
+                weight_market_share=share,
+                weight_loyalty=loyalty,
+            ),
+        )
+    return env
 
 
 def linear_schedule(start: float) -> Callable[[float], float]:
@@ -154,6 +185,16 @@ def train(args: argparse.Namespace) -> RecurrentPPO:
     venv: VecEnv = DummyVecEnv(make_env_fns(args))
     # Reward scaling for training only; observations stay raw because scoring applies no stats.
     venv = VecNormalize(venv, norm_obs=False, norm_reward=True, gamma=args.gamma)
+    if args.resume is not None:
+        # Continue from a saved zip: weights and LSTM architecture come from the file, and the
+        # step counter carries on so ``--steps`` means "this many more".
+        model = RecurrentPPO.load(args.resume, env=venv, tensorboard_log=None)
+        model.learn(
+            total_timesteps=args.steps,
+            callback=build_callbacks(args, run_dir),
+            reset_num_timesteps=False,
+        )
+        return model
     model = build_model(args, venv, run_dir)
     model.learn(total_timesteps=args.steps, callback=build_callbacks(args, run_dir))
     return model
@@ -163,6 +204,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train Jack (RecurrentPPO) against five NPCs (a full six-seat match).")
     parser.add_argument("label", help="run name; logs and checkpoints go under runs/<label>/")
     parser.add_argument("--steps", type=int, default=20_000, help="total env steps over all copies")
+    parser.add_argument("--env", choices=("six", "given"), default="six")
+    parser.add_argument("--resume", type=Path, help="continue training from this zip")
+    parser.add_argument(
+        "--reward-weights",
+        type=lambda text: tuple(float(part) for part in text.split(",")),
+        help="profit,revenue,market_share,loyalty (sum 1.0) for a weighted training reward; "
+        "omit for profit-only",
+    )
     parser.add_argument("--n-envs", type=int, default=4)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--episode-ticks", type=int, default=1000)
