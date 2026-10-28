@@ -1,0 +1,1 @@
+{"algo": "recurrent_ppo", "reward": "profit", "steps": 280000, "seed": 0, "ent_coef": 0.0, "note": "expert search + league, behaviour cloning + DAgger, then 280k steps of RecurrentPPO on profit; patched: wage_spend bias +0.46, AFFLUENT expansion logits +1.2"}

@@ -137,7 +137,9 @@ def dagger_rollout(job: tuple[str, dict, list[dict], int]) -> tuple[np.ndarray, 
     agents = env.possible_agents
     learner = ZipPolicy(zip_path)
     teacher = ko.Expert(params)
-    others = [ko.Expert(o) for o in opps]
+    import krischo_zoo as kz
+
+    others = [kz.ZipAny(o) if isinstance(o, str) else ko.Expert(o) for o in opps]  # a str is a frozen zip opponent
     obs, _ = env.reset(seed=world_seed)
     seen, labels, score = [], [], 0.0
     for _ in range(1000):
@@ -196,6 +198,12 @@ def cmd_dagger(args: argparse.Namespace) -> None:
     disc = [(s.offset, s.width) for s in layout.levers if s.spec.kind is LeverKind.DISCRETE]
     disc_cols = {c for off, w in disc for c in range(off, off + w)}
     cont = [c for c in range(act.shape[2]) if c not in disc_cols]
+    if args.init:  # continue from a trained zip: un-fold its observation scale so training sees obs / scale
+        pol.load_state_dict(RecurrentPPO.load(args.init, device="cpu").policy.state_dict())
+        with torch.no_grad():
+            for m in (pol.lstm_actor, pol.lstm_critic):
+                if m is not None:
+                    m.weight_ih_l0.mul_(torch.tensor(scale, dtype=torch.float32))
     train_params = [*pol.lstm_actor.parameters(), *pol.mlp_extractor.policy_net.parameters(), *pol.action_net.parameters()]
 
     def fit(obs_a: np.ndarray, act_a: np.ndarray, epochs: int, lr: float) -> float:
@@ -238,7 +246,7 @@ def cmd_dagger(args: argparse.Namespace) -> None:
             pol.log_std.data.copy_(log_std)
 
     out_zip = args.out
-    loss = fit(obs, act, args.epochs, args.lr)
+    loss = 0.0 if args.init else fit(obs, act, args.epochs, args.lr)
     save_folded(out_zip)
     print(f"iter 0: loss {loss:.4f} -> {out_zip} ({int(time.time() - t0)}s)", flush=True)
     for it in range(1, args.iters + 1):
@@ -246,7 +254,12 @@ def cmd_dagger(args: argparse.Namespace) -> None:
         for e in range(args.rollouts):
             seed = 7000 + 100 * it + e
             r = random.Random(seed)
-            opps = draw(hard, seed, 3) + draw(pool, seed, 2) if r.random() < args.hard_frac else draw(pool, seed, 5)
+            if args.orcho and r.random() < args.orcho_frac:
+                opps = [args.orcho, *draw(pool, seed, 4)]
+            elif r.random() < args.hard_frac:
+                opps = draw(hard, seed, 3) + draw(pool, seed, 2)
+            else:
+                opps = draw(pool, seed, 5)
             jobs.append((out_zip, params, opps, seed))
         with ProcessPoolExecutor(max_workers=args.workers) as ex:
             res = list(ex.map(dagger_rollout, jobs, chunksize=1))
@@ -457,6 +470,9 @@ def main() -> None:
     d.add_argument("--lr", type=float, default=2e-3)
     d.add_argument("--exp-weight", type=float, default=40.0)
     d.add_argument("--hard-frac", type=float, default=0.0, help="share of rollouts played against the family that beats us")
+    d.add_argument("--init", default=None, help="continue from this trained zip instead of cloning from scratch")
+    d.add_argument("--orcho", default=None, help="zip of an opponent agent to include in most rollouts")
+    d.add_argument("--orcho-frac", type=float, default=0.6)
     d.add_argument("--threads", type=int, default=10)
     d.add_argument("--workers", type=int, default=11)
     t = sub.add_parser("tournament")
