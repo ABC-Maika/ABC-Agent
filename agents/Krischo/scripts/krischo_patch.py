@@ -70,6 +70,9 @@ def main() -> None:
     parser.add_argument("--pool", default="runs/league2/pool.json")
     parser.add_argument("--wage", type=float, default=None, help="target mean wage_spend (e.g. 0.5)")
     parser.add_argument("--expansion", action="store_true", help="re-fit the expansion head")
+    parser.add_argument("--research", type=float, default=0.0, help="add this to the research output bias")
+    parser.add_argument("--boost", type=float, default=0.0, help="add this to the expansion logits of --boost-classes")
+    parser.add_argument("--boost-classes", default="1", help="comma list: 0 METRO, 1 AFFLUENT, 2 LOYAL, 3 FRONTIER")
     parser.add_argument("--matches", type=int, default=22)
     parser.add_argument("--epochs", type=int, default=400)
     parser.add_argument("--nonzero-weight", type=float, default=4.0)
@@ -89,6 +92,22 @@ def main() -> None:
             before = float(head.bias[slot])
             head.bias[slot] += args.wage - 0.04  # the agent's mean wage output is ~0.04
         print(f"wage_spend output bias {before:.3f} -> {float(head.bias[slot]):.3f} (target mean {args.wage})", flush=True)
+
+    if args.research:
+        slot = LAYOUT["research"].offset
+        with torch.no_grad():
+            head.bias[slot] += args.research
+        print(f"research output bias +{args.research}", flush=True)
+
+    if args.boost:
+        # Raise the expansion logit of every region of the chosen classes (region r has class (r-1)%4: 0 METRO, 1 AFFLUENT,
+        # 2 LOYAL, 3 FRONTIER). The 'hold' logit is untouched, so the agent buys these regions until none is left and then
+        # stops: the store cap comes from which classes are boosted (METRO 6 + AFFLUENT 6 = 12 stores).
+        classes = [int(c) for c in args.boost_classes.split(",")]
+        slots = [EXP.offset + r for r in range(1, 25) if (r - 1) % 4 in classes]
+        with torch.no_grad():
+            head.bias[slots] += args.boost
+        print(f"expansion logit +{args.boost} for classes {classes} ({len(slots)} regions)", flush=True)
 
     if args.expansion:
         t0 = time.time()

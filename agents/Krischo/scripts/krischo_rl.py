@@ -29,6 +29,7 @@ import krischo_league as kl  # noqa: E402
 import krischo_optimize as ko  # noqa: E402
 import krischo_zoo as kz  # noqa: E402
 
+from retail_simulator.core.schema import observation_schema  # noqa: E402
 from retail_simulator.envs.arena import arena_balanced_config  # noqa: E402
 from retail_simulator.envs.parallel_env import RetailParallelEnv  # noqa: E402
 from retail_simulator.envs.spaces import build_action_space, build_observation_space  # noqa: E402
@@ -37,10 +38,14 @@ from retail_simulator.envs.spaces import build_action_space, build_observation_s
 class LeagueEnv(gym.Env):
     """Seat 0 is the learner; seats 1..5 are expert opponents. Observations are divided by ``scale``."""
 
-    def __init__(self, seed: int, pool: list[dict], hard_frac: float, scale: np.ndarray, zips: list[str] | None = None) -> None:
+    def __init__(self, seed: int, pool: list[dict], hard_frac: float, scale: np.ndarray, zips: list[str] | None = None, orcho: str | None = None, orcho_frac: float = 0.0, bonus: float = 0.0) -> None:
         super().__init__()
         self.np_random, _ = gym.utils.seeding.np_random(seed)
         self.pool, self.hard_frac, self.scale, self.zips = pool, hard_frac, scale, zips
+        self.orcho, self.orcho_frac, self.bonus = orcho, orcho_frac, bonus  # bonus: shaping reward per new AFFLUENT/LOYAL store after the 6 METRO ones
+        idx = {f.name: i for i, f in enumerate(observation_schema(25))}
+        self.store_cols = [idx[f"stores_region_{r}"] for r in range(1, 25)]
+        self.total_col = idx["stores"]
         config = arena_balanced_config()
         self.config = config
         self.observation_space = build_observation_space(config)
@@ -58,6 +63,8 @@ class LeagueEnv(gym.Env):
         else:
             opps = [kl.make_hard(rng) for _ in range(3)] + rng.sample(self.pool, 2) if rng.random() < self.hard_frac else rng.sample(self.pool, 5)
             others = [ko.Expert(o) for o in opps]
+        if self.orcho and rng.random() < self.orcho_frac:
+            others[rng.randrange(5)] = kz.ZipAny(self.orcho)
         world_seed = int(self.np_random.integers(0, 2**31 - 1))
         self.world = RetailParallelEnv(
             self.config,
@@ -78,18 +85,26 @@ class LeagueEnv(gym.Env):
         actions = {self.agents[0]: np.asarray(action, dtype=np.float32)}
         for i, a in enumerate(self.agents[1:]):
             actions[a] = np.asarray(self.others[i](self.obs[a]), dtype=np.float32).ravel()
+        before = np.asarray(self.obs[self.agents[0]])
         self.obs, rewards, _, _, _ = self.world.step(actions)
         self.tick += 1
-        return self._learner_obs(), float(rewards[self.agents[0]]), False, self.tick >= 1000, {}
+        reward = float(rewards[self.agents[0]])
+        if self.bonus:
+            after = np.asarray(self.obs[self.agents[0]])
+            if before[self.total_col] >= 6 and after[self.total_col] <= 12:
+                for r, col in enumerate(self.store_cols):  # region r+1: class (r % 4), 1 = AFFLUENT, 2 = LOYAL
+                    if before[col] == 0 and after[col] > 0:
+                        reward += self.bonus if r % 4 in (1, 2) else -self.bonus if r % 4 == 3 else 0.0  # FRONTIER does not pay
+        return self._learner_obs(), reward, False, self.tick >= 1000, {}
 
     def _learner_obs(self) -> np.ndarray:
         return (np.asarray(self.obs[self.agents[0]], dtype=np.float32) / self.scale).astype(np.float32)
 
 
-def make_env(seed: int, pool: list[dict], hard_frac: float, scale: np.ndarray, zips: list[str] | None = None):
+def make_env(seed: int, pool: list[dict], hard_frac: float, scale: np.ndarray, zips: list[str] | None = None, orcho: str | None = None, orcho_frac: float = 0.0, bonus: float = 0.0):
     from stable_baselines3.common.monitor import Monitor
 
-    return Monitor(LeagueEnv(seed, pool, hard_frac, scale, zips))
+    return Monitor(LeagueEnv(seed, pool, hard_frac, scale, zips, orcho, orcho_frac, bonus))
 
 
 def main() -> None:
@@ -109,6 +124,10 @@ def main() -> None:
     parser.add_argument("--zoo", action="store_true", help="train against the opponent zoo instead of the expert pool only")
     parser.add_argument("--zips", nargs="*", default=["agents/Krischo/rppo-lstm/checkpoint_v4.zip", "agents/Krischo/rppo-lstm/checkpoint_v6.zip", "agents/Krischo/rppo-lstm/checkpoint_v8.zip"], help="frozen zips used as opponents in the zoo")
     parser.add_argument("--research-bias", type=float, default=0.0, help="raise the research output so rival signals are readable")
+    parser.add_argument("--orcho", default=None, help="zip of Orcho's agent, used as one opponent in --orcho-frac of the matches")
+    parser.add_argument("--orcho-frac", type=float, default=0.6)
+    parser.add_argument("--bonus", type=float, default=0.0, help="shaping reward per new AFFLUENT/LOYAL store after the first 6 stores")
+    parser.add_argument("--exp-std", type=float, default=None, help="log-std of the 32 expansion logits only (explore other regions; the rest keeps --log-std)")
     args = parser.parse_args()
 
     from sb3_contrib import RecurrentPPO
@@ -127,7 +146,7 @@ def main() -> None:
     scale = (np.maximum(np.abs(obs_data).max(axis=(0, 1)), 1.0) * 1.5).astype(np.float32)
 
     zips = args.zips if args.zoo else None
-    venv = SubprocVecEnv([partial(make_env, args.seed * 1000 + i, train_pool, args.hard_frac, scale, zips) for i in range(args.n_envs)])
+    venv = SubprocVecEnv([partial(make_env, args.seed * 1000 + i, train_pool, args.hard_frac, scale, zips, args.orcho, args.orcho_frac, args.bonus) for i in range(args.n_envs)])
     venv = VecNormalize(venv, norm_obs=False, norm_reward=True, gamma=0.999)
     n_steps = 256
     model = RecurrentPPO(
@@ -154,6 +173,11 @@ def main() -> None:
         for m in lstms:  # un-fold: the env now feeds obs/scale
             m.weight_ih_l0.mul_(scale_t)
         pol.log_std.data.fill_(args.log_std)
+        if args.exp_std is not None:
+            from retail_simulator.core.encoding import flatten_action_space_layout
+
+            exp = next(s for s in flatten_action_space_layout().levers if s.spec.name == "expansion")
+            pol.log_std.data[exp.offset : exp.offset + exp.width] = args.exp_std
         if args.research_bias:  # shift the mean research output; RL can lower it again if it does not pay
             from retail_simulator.core.encoding import flatten_action_space_layout
 
