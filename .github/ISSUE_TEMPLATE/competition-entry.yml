@@ -6,9 +6,11 @@ body:
   - type: markdown
     attributes:
       value: |
-        Submit **one** trained checkpoint. Attach your Stable-Baselines3 or sb3-contrib
-        `.zip` (produced by `model.save(...)`) by dragging it into the **Checkpoint**
-        field below. See the README for how the entry is trained, self-checked, and scored.
+        Submit **one** trained checkpoint. Attach two files by dragging them into the
+        **Checkpoint** field below: your Stable-Baselines3 or sb3-contrib `.zip` (produced
+        by `model.save(...)`) and your `entry.json` (the same six fields this form asks for;
+        see the README's Submit section). See the README for how the entry is trained,
+        self-checked, and scored.
         Final scoring is a tournament among the entries, with no NPCs: entrants are grouped
         into matches of up to six, with seats, home regions and (in larger fields) groups
         rotated across several matches, and ranked by aggregate profit, on an undisclosed
@@ -51,7 +53,10 @@ body:
     id: sb3_version
     attributes:
       label: stable-baselines3 version
-      description: The stable-baselines3 version that saved the zip (the repo pins >=2.3,<3.0).
+      description: >-
+        The stable-baselines3 version that saved the zip (the repo pins >=2.3,<3.0). Read it
+        from the zip's system_info.txt (the "Stable-Baselines3:" line), e.g.
+        `unzip -p model.zip system_info.txt`.
       placeholder: "2.8.0"
     validations:
       required: true
@@ -76,8 +81,10 @@ body:
     id: checkpoint
     attributes:
       label: Checkpoint
-      description: Drag-and-drop your Stable-Baselines3 or sb3-contrib .zip checkpoint here to attach it.
-      placeholder: Attach your model .zip here (the same one you self-checked).
+      description: >-
+        Drag-and-drop both files here to attach them: your Stable-Baselines3 or sb3-contrib
+        .zip checkpoint and your entry.json.
+      placeholder: Attach your model .zip (the same one you self-checked) and your entry.json here.
     validations:
       required: true
   - type: checkboxes
