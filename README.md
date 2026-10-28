@@ -189,6 +189,16 @@ python scripts/arena_competition.py --balanced --rounds 1000 \
 > its numbers say nothing about your entry. The first log line names the world:
 > it should read `arena match starting: arena-balanced (…) world`.
 
+## Team agents (our fork)
+
+Our team trains four agents and compares them before choosing the one entry. Each teammate
+keeps their agent in `agents/<your-name>/<agent-name>/` (final `checkpoint.zip`, `NOTES.md`,
+`recipe.json`). The full how-to, the suggested A to D split and the training commands are in
+[`agents/README.md`](agents/README.md). Inside Claude Code, `/new-agent` scaffolds a folder and
+`/compare-agents` runs the rotated comparison. To watch a match, run
+`python scripts/arena_replay.py --npc cherry-picker --npc fortress --npc fast-follower --npc sprawler --out runs/replay.html`
+and open the HTML file.
+
 ## Submit
 
 Open an entry with the
