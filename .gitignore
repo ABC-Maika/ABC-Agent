@@ -12,5 +12,5 @@ __pycache__/
 /results.json
 /decisions.csv
 
-# Claude Code files
+# Local Claude Code config (not shared)
 .claude/
