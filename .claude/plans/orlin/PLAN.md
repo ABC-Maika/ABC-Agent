@@ -12,10 +12,11 @@ Build my agent for the team's 4-agent comparison, help compare them, and make su
 - [x] Repo pushed to https://github.com/ABC-Maika/Simulation (`origin`); organizer repo kept as `upstream`.
 - [x] `.claude/` folder, `agents/` layout and team how-to (`agents/README.md`).
 
+- [x] Agent D: RecurrentPPO "Jack" in `agents/orlin/jack/` (20k-step smoke run, six-seat training; self-check scored -12k and +30k, cherry-picker wins).
+
 ## Next
-- [ ] Pick my agent (A: profit PPO / B: weighted PPO / C: explorer / D: RecurrentPPO or SAC) and agree the split with the team.
-- [ ] `/new-agent orlin <agent-name> <recipe>`, then train (run in background, 6 rounds x 300k steps is slow).
-- [ ] Self-check against NPCs with 2+ different `--homes`.
+- [ ] Train Jack longer (300k+ steps) and retry with `--ent-coef 0.02`.
+- [ ] Fill the team name in `agents/orlin/jack/entry.json`.
 - [ ] Replay viewer with a trained player (`--player`): untested.
 - [ ] When 2+ checkpoints exist: `/compare-agents`, read `agents/COMPARISON.md`.
 - [ ] Decide the team's single entry, write `entry.json`, file the GitHub entry issue.
