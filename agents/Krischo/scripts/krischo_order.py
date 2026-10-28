@@ -24,11 +24,13 @@ import krischo_optimize as ko  # noqa: E402
 OPPS = ["agents/orcho/market-share/checkpoint.zip", "agents/misho/jack/checkpoint.zip", "agents/Yavkata/recurrent-ppo/checkpoint.zip"]
 POOL = "runs/league2/pool.json"
 
+ORCHO_LIKE = {"max_stores": 12, "max_class": 2, "price": 2.0, "k_price": 0.0, "w_rival": 0.0, "warehouse": 0.0, "k_wh": 0.0, "cash_buffer": 0.0, "wage_spend": 0.45, "k_wage_h": 4.0, "research": 0.2}
 VARIANTS = {
-    "6 stores (METRO only)": {"max_stores": 6, "max_class": 1},
-    "8 stores (+AFFLUENT)": {"max_stores": 8, "max_class": 2},
-    "10 stores (+AFFLUENT/LOYAL)": {"max_stores": 10, "max_class": 3},
-    "12 stores (+AFFLUENT/LOYAL)": {"max_stores": 12, "max_class": 3},
+    "v5 (ours)": {"max_class": 2},
+    "Orcho-like recipe": ORCHO_LIKE,
+    "Orcho-like, our warehouse": {**ORCHO_LIKE, "warehouse": 0.082, "k_wh": 0.4355},
+    "Orcho-like, research 0": {**ORCHO_LIKE, "research": 0.0},
+    "Orcho-like, our price": {**ORCHO_LIKE, "k_price": 0.0286, "w_rival": 0.234},
 }
 
 
