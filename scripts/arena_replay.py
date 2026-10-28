@@ -16,10 +16,13 @@ from pathlib import Path
 
 from retail_simulator.envs.arena import arena_home_regions
 from retail_simulator.envs.arena_match import ArenaMatch, ArenaSeatSpec, resolve_arena_world
-from retail_simulator.envs.geo_archetypes import GEO_ARCHETYPE_LABELS
+from aggressive_npcs import AGGRESSIVE_DESCRIPTIONS, register
 
 # Region 0 is stranded (never enterable); regions 1..24 cycle these four classes in order.
+SEATS = 6  # team rule: every simulation seats exactly six agents
 REGION_CLASSES = ["METRO", "AFFLUENT", "LOYAL", "FRONTIER"]
+
+NPC_LABELS = register()  # organizer archetypes + our aggressive variants
 
 ARCHETYPES = {
     "sprawler": "Low price, minimal spend on everything, opens the lowest-index empty region every tick.",
@@ -39,17 +42,22 @@ def main() -> int:
     parser.add_argument("--rounds", type=int, default=300)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--player", action="append", default=[], metavar="LABEL=PATH")
-    parser.add_argument("--npc", action="append", default=[], choices=list(GEO_ARCHETYPE_LABELS))
+    parser.add_argument("--npc", action="append", default=[], choices=list(NPC_LABELS))
     parser.add_argument("--out", type=Path, default=Path("runs/replay.html"))
     args = parser.parse_args()
 
     seats = []
+    metas: dict[str, dict] = {}
     for spec in args.player:
         label, _, path = spec.partition("=")
         seats.append(ArenaSeatSpec(name=label, kind="rl", checkpoint=path))
+        # train_vs_npcs.py writes <checkpoint>.json (algo, reward, steps); absent for other trainers.
+        sidecar = Path(path).with_suffix(".json")
+        if sidecar.exists():
+            metas[label] = json.loads(sidecar.read_text())
     seats += [ArenaSeatSpec(name=n, kind="npc", archetype=n) for n in args.npc]
-    if len(seats) < 2:
-        parser.error("seat at least two of --player / --npc")
+    if len(seats) != SEATS:
+        parser.error(f"every simulation runs with exactly {SEATS} seats, got {len(seats)}")
 
     cfg, _, _ = resolve_arena_world(balanced=True)
     homes = arena_home_regions(len(seats))
@@ -76,13 +84,16 @@ def main() -> int:
             }
         )
     data = {
-        "seats": [{"name": s.name, "kind": s.kind, "home": h} for s, h in zip(seats, homes)],
+        "seats": [
+            {"name": s.name, "kind": s.kind, "home": h, "meta": metas.get(s.name)}
+            for s, h in zip(seats, homes)
+        ],
         "classes": ["STRANDED"]
         + [REGION_CLASSES[(k - 1) % 4] for k in range(1, match.n_regions)],
         "price": cfg.expansion.expansion_capex,
         "demand": [r.base_regional_demand for r in cfg.demand.regions],
         "leverFmt": LEVER_FMT,
-        "archetypes": ARCHETYPES,
+        "archetypes": {**ARCHETYPES, **AGGRESSIVE_DESCRIPTIONS},
         "leverNames": lever_names,
         "rounds": rounds,
     }

@@ -36,6 +36,8 @@ Commands: see the README, "Example: train against the NPC field" and "Self-check
 from __future__ import annotations
 
 import argparse
+import json
+from dataclasses import replace
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, ClassVar
@@ -46,7 +48,7 @@ import numpy.typing as npt
 import torch
 from gymnasium import spaces
 from gymnasium.utils import seeding
-from stable_baselines3 import PPO, SAC
+from stable_baselines3 import A2C, PPO, SAC
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.utils import set_random_seed
 from stable_baselines3.common.vec_env import DummyVecEnv, VecEnv, VecNormalize
@@ -95,10 +97,13 @@ class NpcFieldEnv(gym.Env):
         bound_logits: bool = False,
         reward_scale: float = 1.0,
         obs_scale: npt.NDArray[np.float32] | None = None,
+        reward: str = "profit",
     ) -> None:
         super().__init__()
         self.np_random, _ = seeding.np_random(seed)
         self._config = arena_balanced_config()
+        if reward == "weighted":
+            self._config = replace(self._config, reward=replace(self._config.reward, mode="weighted"))
         self._regions = self._config.demand.regions
         self._metro_homes = arena_home_regions(N_METRO_HOMES, n_regions=len(self._regions))
         self._episode_ticks = episode_ticks
@@ -201,7 +206,11 @@ def make_env_fns(args: argparse.Namespace, **env_kwargs: Any) -> list[Callable[[
     return [
         lambda s=s: Monitor(
             NpcFieldEnv(
-                s, episode_ticks=args.episode_ticks, bound_logits=args.bound_logits, **env_kwargs
+                s,
+                episode_ticks=args.episode_ticks,
+                bound_logits=args.bound_logits,
+                reward=args.reward,
+                **env_kwargs,
             )
         )
         for s in seeds
@@ -211,6 +220,8 @@ def make_env_fns(args: argparse.Namespace, **env_kwargs: Any) -> list[Callable[[
 def build_model(args: argparse.Namespace, venv: VecEnv) -> Any:
     if args.algo == "ppo":
         return PPO("MlpPolicy", venv, verbose=1)
+    if args.algo == "a2c":
+        return A2C("MlpPolicy", venv, verbose=1)
     if args.algo == "recurrent_ppo":
         from sb3_contrib import RecurrentPPO
 
@@ -250,7 +261,14 @@ def train(args: argparse.Namespace) -> Any:
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train one arena entry against the NPC field.")
     parser.add_argument("label", help="run name; names the default --out")
-    parser.add_argument("--algo", choices=("ppo", "recurrent_ppo", "sac"), default="ppo")
+    parser.add_argument("--algo", choices=("ppo", "a2c", "recurrent_ppo", "sac"), default="ppo")
+    parser.add_argument(
+        "--reward",
+        choices=("profit", "weighted"),
+        default="profit",
+        help="training reward: profit only, or the weighted blend (profit 0.5, revenue 0.2, "
+        "market share 0.2, loyalty 0.1)",
+    )
     parser.add_argument(
         "--steps",
         type=int,
@@ -293,6 +311,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     model.save(args.out)
     print(f"saved {args.out}")
+    # Sidecar read by scripts/arena_replay.py to label what this checkpoint was trained on.
+    meta = {"algo": args.algo, "reward": args.reward, "steps": args.steps, "seed": args.seed}
+    args.out.with_suffix(".json").write_text(json.dumps(meta) + "\n")
     return 0
 
 
