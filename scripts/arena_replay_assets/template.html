@@ -28,7 +28,7 @@ td:first-child,th:first-child,td.l,th.l{text-align:left}tr+tr td{border-top:1px 
 .seat{background:var(--card2);border-radius:8px;padding:12px;border-left:4px solid}.seat h4{margin:0;font-size:15px}.seat .sub{font-size:12px;color:var(--mut);min-height:34px;margin:2px 0 6px}
 .kv{display:flex;justify-content:space-between;font-size:12px;padding:1px 0}.kv b{font-variant-numeric:tabular-nums}
 .lv{display:grid;grid-template-columns:96px 1fr 52px;gap:6px;align-items:center;font-size:11px;margin:2px 0}.lv i{display:block;height:6px;border-radius:3px;background:#0006;overflow:hidden}.lv i s{display:block;height:100%}.lv span:last-child{text-align:right}
-.opened{margin-top:6px;font-size:11px;color:var(--mut)}.badge{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;margin:0 0 6px;background:#0005;border:1px solid}.b-profit{color:#5fd38d}.b-weighted{color:#e0a100}.b-none{color:var(--mut)}
+.opened{margin-top:6px;font-size:11px;color:var(--mut)}.badge{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;margin:0 0 6px;background:#0005;border:1px solid}.b-profit{color:#5fd38d}.b-weighted{color:#e0a100}.b-marketing{color:#4ea1ff}.b-balanced{color:#19a974}.b-none{color:var(--mut)}
 #feed{max-height:330px;overflow:auto}#feed table{font-size:12px}#feed tr{cursor:pointer}#feed tr:hover td{background:var(--card2)}#feed tr.new td{background:#4ea1ff22}
 #sum{font-size:12px;margin:0 0 8px;display:flex;flex-wrap:wrap;gap:4px 16px}
 .charts{display:grid;grid-template-columns:1fr 1fr;gap:12px}canvas{width:100%;height:210px;display:block}
@@ -77,6 +77,9 @@ td:first-child,th:first-child,td.l,th.l{text-align:left}tr+tr td{border-top:1px 
 <div class=explain>
 <div class=card><h2>profit only</h2><p>Reward each round = that round's profit. The same thing the final tournament ranks on.</p></div>
 <div class=card><h2>weighted</h2><p>Reward = a blend: <b>profit 0.5</b>, <b>revenue 0.2</b>, <b>market share 0.2</b>, <b>loyalty 0.1</b> (each rescaled first). It pushes the agent towards sales, share and loyal customers, even when profit is lower.</p></div>
+<div class=card><h2>marketing</h2><p>Reward = profit <b>plus 100 × the mean brand awareness</b> the agent holds in the regions where it has stores. It pays the agent to build and keep awareness, and profit still counts.</p></div>
+<div class=card><h2>balanced</h2><p>Marketing reward <b>plus 300 × staff happiness</b> (unhappy staff cause random losses) <b>plus 30 for every lever kept between 5% and 95%</b> of its range, so the agent uses all of them.</p></div>
+<div class=card><h2>imitation</h2><p>No reward at all. The agent is shown what the scripted recipe saw and did over several matches and learns to copy it by supervised learning.</p></div>
 <div class=card><h2>scripted rivals</h2><p>Cherry-picker, fortress, fast-follower and sprawler have no reward. They follow fixed rules.</p></div></div>
 <div class=note>The tournament ranks on <b>total profit only</b>, whatever reward the agent trained on. Each seat card below says which reward its checkpoint used.</div></div>
 
@@ -136,10 +139,11 @@ if(o.marks)feed.filter(e=>e.t>=0).forEach(e=>{x.fillStyle=COL[e.i];x.beginPath()
 x.strokeStyle="#fffa";x.lineWidth=2;x.beginPath();x.moveTo(X(t),0);x.lineTo(X(t),h);x.stroke();
 cv.onclick=e=>{const b=cv.getBoundingClientRect();go(Math.max(0,Math.min(T-1,Math.round(((e.clientX-b.left)*2-L)/(w-L-14)*(T-1)))))}}
 function lv(n,v,k){const e=D.leverFmt[n]||{};return e.price?"×"+v.toFixed(2):e.tier?"tier "+Math.round(v):Math.round(v*100)+"%"}
+function inUse(l){const R={price_index:[.5,2]};return D.leverNames.filter(n=>n!='automation'&&n!='expansion').filter(n=>{const [a,b]=R[n]||[0,1];const f=((l[n]??0)-a)/(b-a);return f>=.05&&f<=.95}).length}
 function rw(s){const m=s.meta;if(s.kind!="rl")return '<span class=mut>none (fixed rules)</span>';if(!m)return '<span class=mut>unknown</span>';
-return m.reward=="profit"?'<b class=pos>profit only</b>':'<b style="color:#e0a100">weighted</b> <span class=mut>(profit .5, revenue .2, share .2, loyalty .1)</span>'}
+return m.reward=="profit"?'<b class=pos>profit only</b>':m.reward=="imitation"?'<b style="color:#19a974">imitation</b> <span class=mut>(learned by copying the scripted recipe)</span>':m.reward=="balanced"?'<b style="color:#19a974">balanced</b> <span class=mut>(profit + 100 × awareness + 300 × staff happiness + 30 per lever in use)</span>':m.reward=="marketing"?'<b style="color:#4ea1ff">marketing</b> <span class=mut>(profit + 100 × mean awareness)</span>':'<b style="color:#e0a100">weighted</b> <span class=mut>(profit .5, revenue .2, share .2, loyalty .1)</span>'}
 function badge(s){const m=s.meta;if(s.kind!="rl"||!m)return s.kind=="rl"?'<div class="badge b-none">reward: unknown</div>':'<div class="badge b-none">no reward · fixed rules</div>';
-const w=m.reward=="profit"?'reward: profit only':'reward: weighted (profit .5 · revenue .2 · share .2 · loyalty .1)';
+const w=m.reward=="profit"?'reward: profit only':m.reward=="imitation"?'trained by imitation of the scripted recipe':m.reward=="balanced"?'reward: balanced (profit + awareness + staff happiness + lever coverage)':m.reward=="marketing"?'reward: marketing (profit + 100 × mean awareness)':'reward: weighted (profit .5 · revenue .2 · share .2 · loyalty .1)';
 return `<div class="badge b-${m.reward}">${m.algo.toUpperCase()} · ${w} · ${fmt(m.steps)} steps</div>`}
 function go(t){cur=t;render()}
 let lastRender=-1;
@@ -154,7 +158,7 @@ if(lastRender!==t)r.opened.forEach((reg,i)=>reg.forEach(k=>{const c=document.cre
 lastRender=t;
 // standings
 const order=idx.slice().sort((a,b)=>cum[t][b]-cum[t][a]);
-$("lb").innerHTML="<tr><th>#<th class=l>Seat<th>Score<th>Profit/rd<th>Revenue<th>Cash<th>Share<th>Stores<th class=l>Trained reward</tr>"+order.map((i,p)=>`<tr><td>${p==0?"🥇":p==1?"🥈":p==2?"🥉":p+1}<td class=l><span class=dot style="background:${COL[i]}"></span>${D.seats[i].name} <span class=mut>${D.seats[i].kind=="rl"?"RL":"NPC"}</span><td class=${cum[t][i]<0?"neg":""}>${fmt(cum[t][i])}<td class=${r.profit[i]<0?"neg":"pos"}>${fmt(r.profit[i])}<td>${fmt(rev[t][i])}<td class=${r.cash[i]<0?"neg":""}>${fmt(r.cash[i])}<td>${(r.share[i]*100).toFixed(1)}%<td>${r.stores[i]}<td class=l>${rw(D.seats[i])}`).join("");
+$("lb").innerHTML="<tr><th>#<th class=l>Seat<th>Score<th>Profit/rd<th>Revenue<th>Cash<th>Share<th>Stores<th>Staff<th>Levers in use<th class=l>Trained reward</tr>"+order.map((i,p)=>`<tr><td>${p==0?"🥇":p==1?"🥈":p==2?"🥉":p+1}<td class=l><span class=dot style="background:${COL[i]}"></span>${D.seats[i].name} <span class=mut>${D.seats[i].kind=="rl"?"RL":"NPC"}</span><td class=${cum[t][i]<0?"neg":""}>${fmt(cum[t][i])}<td class=${r.profit[i]<0?"neg":"pos"}>${fmt(r.profit[i])}<td>${fmt(rev[t][i])}<td class=${r.cash[i]<0?"neg":""}>${fmt(r.cash[i])}<td>${(r.share[i]*100).toFixed(1)}%<td>${r.stores[i]}<td class=${r.happy[i]<.3?"neg":"pos"}>${(r.happy[i]*100).toFixed(0)}%<td>${inUse(r.levers[i])}/9<td class=l>${rw(D.seats[i])}`).join("");
 // audit
 const ev=feed.filter(e=>e.t<=t).reverse();
 $("sum").innerHTML=D.seats.map((s,i)=>{const n=ev.filter(e=>e.i==i&&e.t>=0).length;return `<span><span class=dot style="background:${COL[i]}"></span>${s.name}: ${n} bought · ${fmt(n*D.price)} spent</span>`}).join("");

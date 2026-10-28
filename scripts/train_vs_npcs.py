@@ -53,8 +53,8 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.utils import set_random_seed
 from stable_baselines3.common.vec_env import DummyVecEnv, VecEnv, VecNormalize
 
-from retail_simulator.core.encoding import flatten_action_space_layout
-from retail_simulator.core.schema import LeverKind
+from retail_simulator.core.encoding import decode_action, flatten_action_space_layout
+from retail_simulator.core.schema import LEVER_REGISTRY, LeverKind
 from retail_simulator.envs.arena import arena_balanced_config, arena_home_regions
 from retail_simulator.envs.geo_archetypes import (
     CHERRY_PICKER,
@@ -70,6 +70,21 @@ NPC_FIELD: tuple[str, ...] = (CHERRY_PICKER, FORTRESS, FAST_FOLLOWER, SPRAWLER)
 LEARNER_SEAT = 0
 N_SEATS = 1 + len(NPC_FIELD)
 N_METRO_HOMES = 6  # the published rotation: one home per seat of a full six-seat match
+HAPPINESS_BONUS = 300.0  # reward points for fully happy staff (unhappy staff cause random write-offs)
+COVERAGE_BONUS = 30.0  # reward points per continuous lever kept inside COVERAGE_BAND
+COVERAGE_BAND = (0.05, 0.95)  # share of each lever's range; 5 to 95 percent means "in use"
+CONTINUOUS_LEVERS = (
+    "price_index",
+    "marketing",
+    "assortment",
+    "promotion",
+    "research",
+    "service_level",
+    "loyalty_spend",
+    "wage_spend",
+    "warehouse_invest",
+)
+MARKETING_BONUS = 100.0  # reward points per unit of mean awareness (awareness tops out near 3.3)
 SAC_REWARD_SCALE = 1e-3  # per-tick profit is in the hundreds to thousands
 OBS_SCALE_WARMUP_TICKS = 3000
 
@@ -108,6 +123,8 @@ class NpcFieldEnv(gym.Env):
         self._metro_homes = arena_home_regions(N_METRO_HOMES, n_regions=len(self._regions))
         self._episode_ticks = episode_ticks
         self._reward_scale = reward_scale
+        self._marketing_bonus = reward in ("marketing", "balanced")
+        self._balanced = reward == "balanced"
         self._obs_scale = obs_scale
         native = build_action_space()
         self.action_space = bounded_logit_space(native) if bound_logits else native
@@ -145,8 +162,29 @@ class NpcFieldEnv(gym.Env):
             ).ravel()
         self._obs, rewards, _, _, _ = self._world.step(actions)
         self._tick += 1
-        reward = float(rewards[self._agents[LEARNER_SEAT]]) * self._reward_scale
+        reward = float(rewards[self._agents[LEARNER_SEAT]])
+        if self._marketing_bonus:
+            # Profit plus a bonus for brand awareness held in the regions the seat has stores in.
+            seat = self._world._state.retailers[LEARNER_SEAT]
+            awareness = np.asarray(seat.awareness_per_region, dtype=np.float64)
+            present = np.asarray(seat.stores_per_region) > 0
+            reward += MARKETING_BONUS * (float(awareness[present].mean()) if present.any() else 0.0)
+        if self._balanced:
+            seat = self._world._state.retailers[LEARNER_SEAT]
+            reward += HAPPINESS_BONUS * float(seat.employee_happiness)
+            reward += COVERAGE_BONUS * self._levers_in_use(action)
+        reward *= self._reward_scale
         return self._learner_obs(), reward, False, self._tick >= self._episode_ticks, {}
+
+    def _levers_in_use(self, action: npt.NDArray[np.float32]) -> int:
+        """How many continuous levers the action keeps inside the 5 to 95 percent band of their range."""
+        levers = decode_action(np.asarray(action, dtype=np.float32)).levers
+        count = 0
+        for spec in LEVER_REGISTRY:
+            if spec.name in CONTINUOUS_LEVERS and spec.name in levers:
+                fraction = (float(levers[spec.name]) - spec.low) / (spec.high - spec.low)
+                count += COVERAGE_BAND[0] <= fraction <= COVERAGE_BAND[1]
+        return count
 
     def _learner_obs(self) -> npt.NDArray[np.float32]:
         obs = self._obs[self._agents[LEARNER_SEAT]]
@@ -221,7 +259,7 @@ def build_model(args: argparse.Namespace, venv: VecEnv) -> Any:
     if args.algo == "ppo":
         return PPO("MlpPolicy", venv, verbose=1)
     if args.algo == "a2c":
-        return A2C("MlpPolicy", venv, verbose=1)
+        return A2C("MlpPolicy", venv, ent_coef=args.ent_coef, verbose=1)
     if args.algo == "recurrent_ppo":
         from sb3_contrib import RecurrentPPO
 
@@ -264,10 +302,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--algo", choices=("ppo", "a2c", "recurrent_ppo", "sac"), default="ppo")
     parser.add_argument(
         "--reward",
-        choices=("profit", "weighted"),
+        choices=("profit", "weighted", "marketing", "balanced"),
         default="profit",
-        help="training reward: profit only, or the weighted blend (profit 0.5, revenue 0.2, "
-        "market share 0.2, loyalty 0.1)",
+        help="training reward: profit only; the weighted blend (profit 0.5, revenue 0.2, "
+        "market share 0.2, loyalty 0.1); or marketing (profit + 100 x mean awareness in the "
+        "regions the seat has stores in); or balanced (marketing, plus 300 x staff happiness, plus 30 "
+        "per continuous lever kept inside 5-95%% of its range)",
     )
     parser.add_argument(
         "--steps",
@@ -275,6 +315,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=300_000,
         help="env steps summed over copies. On-policy algos round up to whole rollouts: PPO 2048 "
         "steps per copy, RecurrentPPO 128 (--steps 300000 --n-envs 3 trains 301,056 / 300,288)",
+    )
+    parser.add_argument(
+        "--ent-coef", type=float, default=0.0, help="A2C entropy bonus (keeps actions varied)"
     )
     parser.add_argument(
         "--n-envs",
@@ -312,7 +355,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     model.save(args.out)
     print(f"saved {args.out}")
     # Sidecar read by scripts/arena_replay.py to label what this checkpoint was trained on.
-    meta = {"algo": args.algo, "reward": args.reward, "steps": args.steps, "seed": args.seed}
+    meta = {"algo": args.algo, "reward": args.reward, "steps": args.steps, "seed": args.seed, "ent_coef": args.ent_coef}
     args.out.with_suffix(".json").write_text(json.dumps(meta) + "\n")
     return 0
 

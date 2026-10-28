@@ -27,8 +27,41 @@ AGGRESSIVE_DESCRIPTIONS = {
     "promotion.",
     "sprawler+": "Opens the lowest-index empty region every round. Cheap, with real marketing "
     "behind it.",
+    "orcho-recipe": "SCRIPTED best-known recipe from our lever tests (not a trained checkpoint): "
+    "max price and marketing, wages paid so staff stay happy, stops expanding at 10 stores.",
 }
 AGGRESSIVE_LABELS: tuple[str, ...] = tuple(AGGRESSIVE_DESCRIPTIONS)
+
+
+def _recipe_predict(target_fn: Callable[[Any, int], int], n_regions: int, n_obs: int) -> Any:
+    """Fixed levers (the wage lever is not exposed by the organizer's wrapper) + a store-capped rule."""
+    from retail_simulator.core.encoding import encode_action
+
+    tick = [0]
+
+    def predict(obs: Any, *, episode_start: bool = False, **_kw: Any) -> Any:
+        if episode_start:
+            tick[0] = 0
+        t = tick[0]
+        tick[0] += 1
+        return encode_action(
+            geo._structured_action(
+                price=2.0,
+                marketing=1.0,
+                assortment=1.0,
+                promotion=1.0,
+                expansion_choice=target_fn(obs, t),
+                research=0.0,
+                service_level=1.0,
+                automation_tier=0,
+                loyalty_spend=0.0,
+                n_regions=n_regions,
+                wage_spend=0.5,
+                warehouse_invest=0.0,
+            )
+        )
+
+    return predict
 
 
 def _aggressive_roster(n_regions: int, region_table: Any) -> dict[str, Callable[..., Any]]:
@@ -46,6 +79,11 @@ def _aggressive_roster(n_regions: int, region_table: Any) -> dict[str, Callable[
         )
 
     def sprawl(obs: Any, _tick: int) -> int:
+        return geo._sprawler_target(obs, idx=idx, n_regions=n_regions)
+
+    def capped_sprawl(obs: Any, _tick: int) -> int:
+        if float(obs[idx["stores"]]) >= 10:
+            return 0
         return geo._sprawler_target(obs, idx=idx, n_regions=n_regions)
 
     shared = {"n_regions": n_regions, "n_obs": len(idx), "research": 0.0, "automation_tier": 0}
@@ -70,6 +108,7 @@ def _aggressive_roster(n_regions: int, region_table: Any) -> dict[str, Callable[
             loyalty_spend=0.6,
             **shared,
         ),
+        "orcho-recipe": _recipe_predict(capped_sprawl, n_regions, len(idx)),
         "sprawler+": geo._make_predict(
             sprawl,
             price=0.7,
