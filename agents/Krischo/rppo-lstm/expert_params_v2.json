@@ -1,0 +1,21 @@
+{
+ "price": 2.0,
+ "marketing": 0.9905325627055622,
+ "assortment": 0.9669580062919674,
+ "promotion": 0.9102489228811766,
+ "service": 1.0,
+ "research": 0.0,
+ "wage_spend": 0.05103435950555038,
+ "warehouse": 0.17958427910024072,
+ "max_stores": 12,
+ "max_class": 3,
+ "cash_buffer": 6000.0,
+ "prefer_uncontested": 0,
+ "harvest_tick": 1000,
+ "harvest_cut": 0.41435070574381766,
+ "k_price": 0.0,
+ "k_mkt": 0.0,
+ "k_wh": 0.4355067452700032,
+ "k_wage": 0.0,
+ "cap_cut": 0
+}
