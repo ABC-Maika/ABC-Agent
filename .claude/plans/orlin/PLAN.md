@@ -12,11 +12,14 @@ Build my agent for the team's 4-agent comparison, help compare them, and make su
 - [x] Repo pushed to https://github.com/ABC-Maika/Simulation (`origin`); organizer repo kept as `upstream`.
 - [x] `.claude/` folder, `agents/` layout and team how-to (`agents/README.md`).
 
-- [x] Agent D: RecurrentPPO "Jack" in `agents/orlin/jack/` (20k-step smoke run, six-seat training; self-check scored -12k and +30k, cherry-picker wins).
+- [x] Agent D: RecurrentPPO "Jack" in `agents/misho/jack/` (~170k steps, growth-weighted reward 0.3/0.3/0.3/0.1; self-check 1.4M to 2.0M, rank 1 of 5 on three home rotations).
+- [x] Replay viewer with a trained player (`--player Jack=...`) -> `runs/replay.html`.
+- [x] Jacky-T (TQC) trainer written in `agents/misho/jacky-t/` (no checkpoint: run stopped at ~100k of 171k steps).
 
 ## Next
+- [ ] Re-run Jacky-T to 171,008 steps (add a checkpoint callback first), then six-seat comparison with Jack (`/compare-agents`).
 - [ ] Train Jack longer (300k+ steps) and retry with `--ent-coef 0.02`.
-- [ ] Fill the team name in `agents/orlin/jack/entry.json`.
+- [ ] Fill the team name in `agents/misho/jack/entry.json`.
 - [ ] Replay viewer with a trained player (`--player`): untested.
 - [ ] When 2+ checkpoints exist: `/compare-agents`, read `agents/COMPARISON.md`.
 - [ ] Decide the team's single entry, write `entry.json`, file the GitHub entry issue.

@@ -4,9 +4,9 @@
 - **Algorithm / policy:** recurrent-ppo-lstm (RecurrentPPO, MlpLstmPolicy, sb3-contrib)
 - **Hypothesis:** an LSTM can track how rivals behave across ticks, which the noisy competitor block hides in a single observation.
 - **Training command:**
-  1. `python agents/orlin/jack/train.py jack --steps 20000` (six-seat env, profit reward)
-  2. `python agents/orlin/jack/train.py jack --env given --resume runs/jack_20k.zip --steps 100000` (original 5-seat example env, profit reward)
-  3. `python agents/orlin/jack/train.py jack --env given --resume runs/jack_120k.zip --steps 50000 --reward-weights 0.3,0.3,0.3,0.1 --out runs/jack_w_growth.zip` (this is the checkpoint)
+  1. `python agents/misho/jack/train.py jack --steps 20000` (six-seat env, profit reward)
+  2. `python agents/misho/jack/train.py jack --env given --resume runs/jack_20k.zip --steps 100000` (original 5-seat example env, profit reward)
+  3. `python agents/misho/jack/train.py jack --env given --resume runs/jack_120k.zip --steps 50000 --reward-weights 0.3,0.3,0.3,0.1 --out runs/jack_w_growth.zip` (this is the checkpoint)
 - **sb3_version:** 2.9.2
 - **Date trained:** 2026-10-28
 

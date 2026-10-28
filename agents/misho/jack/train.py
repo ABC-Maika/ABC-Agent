@@ -10,7 +10,7 @@ observation and action are left untouched (318-D in, 44-D out); the LSTM carries
 what rivals did, which is the only place the noisy competitor block can be tracked over time.
 
 Run from the repo root:
-    python agents/orlin/jack/train.py jack --steps 20000 --out agents/orlin/jack/checkpoint.zip
+    python agents/misho/jack/train.py jack --steps 20000 --out agents/misho/jack/checkpoint.zip
 """
 
 from __future__ import annotations
@@ -215,7 +215,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--n-envs", type=int, default=4)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--episode-ticks", type=int, default=1000)
-    parser.add_argument("--out", type=Path, default=Path("agents/orlin/jack/checkpoint.zip"))
+    parser.add_argument("--out", type=Path, default=Path("agents/misho/jack/checkpoint.zip"))
     # Hyperparameters (RecurrentPPO defaults, except gae_lambda 0.98 as in the reference recipes).
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--lr-schedule", choices=("constant", "linear"), default="constant")

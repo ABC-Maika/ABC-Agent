@@ -16,7 +16,7 @@ loyalty). It is already about unit scale, so no extra reward scaling is applied.
 profit.
 
 Run from the repo root:
-    python agents/orlin/jacky-t/train.py jacky_t --steps 171008
+    python agents/misho/jacky-t/train.py jacky_t --steps 171008
 """
 
 from __future__ import annotations
@@ -134,7 +134,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--n-envs", type=int, default=4)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--episode-ticks", type=int, default=1000)
-    parser.add_argument("--out", type=Path, default=Path("agents/orlin/jacky-t/checkpoint.zip"))
+    parser.add_argument("--out", type=Path, default=Path("agents/misho/jacky-t/checkpoint.zip"))
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--gamma", type=float, default=0.99)
