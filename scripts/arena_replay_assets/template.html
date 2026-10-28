@@ -1,0 +1,173 @@
+<!doctype html><html lang=en><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1"><title>Arena Replay</title>
+<style>
+:root{--bg:#10131a;--card:#181d28;--card2:#202737;--line:#2a3347;--txt:#e8eaf0;--mut:#98a2b6;--acc:#4ea1ff;--pos:#5fd38d;--neg:#ff7a7a}
+*{box-sizing:border-box}body{margin:0;font:15px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--txt)}
+.wrap{max-width:1500px;margin:0 auto;padding:0 20px 60px}
+h1{font-size:28px;margin:24px 0 4px}h2{font-size:17px;margin:0 0 4px}h3{font-size:12px;letter-spacing:.08em;margin:0 0 10px;color:var(--mut);text-transform:uppercase}
+p{margin:0 0 8px}.mut{color:var(--mut)}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
+.steps{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:14px 0}
+.step{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.step b{display:inline-flex;width:22px;height:22px;border-radius:50%;background:var(--acc);color:#001;align-items:center;justify-content:center;margin-bottom:4px;font-size:13px}
+.explain{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+details.big{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 16px;margin:12px 0}summary{cursor:pointer;font-weight:600}
+.bar{position:sticky;top:0;z-index:10;background:#12161fee;backdrop-filter:blur(6px);border-bottom:1px solid var(--line);padding:10px 20px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.bar button{background:var(--acc);color:#001;border:0;border-radius:6px;padding:8px 16px;font-weight:700;cursor:pointer}
+.bar button.sec{background:var(--card2);color:var(--txt);padding:8px 12px}
+.bar input[type=range]{accent-color:var(--acc)}#r{flex:1;min-width:180px}.phase{font-size:12px;padding:3px 10px;border-radius:99px;background:var(--card2)}
+.main{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:18px;margin-top:18px;align-items:start}
+#mapsvg{width:100%;height:auto;display:block}.rg{cursor:pointer}.rg path.a{stroke:#10131a;stroke-width:1.5;transition:fill .2s}.rg:hover path.a{stroke:#fff;stroke-width:2}
+.rg.sel path.a{stroke:#fff;stroke-width:3}.rn{font-size:10px;fill:#e8eaf0cc;text-anchor:middle;pointer-events:none;paint-order:stroke;stroke:#10131acc;stroke-width:2.5px}
+.pulse{fill:none;stroke-width:3;animation:pu 1.2s ease-out forwards;pointer-events:none}@keyframes pu{from{r:8;opacity:1}to{r:46;opacity:0}}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12px;margin-top:8px}.dot{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:6px;vertical-align:-1px}
+.cls{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;font-size:11px}.cls span{background:var(--card2);padding:3px 8px;border-radius:99px}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}th{font-size:11px;color:var(--mut);font-weight:600}td,th{padding:6px 5px;text-align:right}
+td:first-child,th:first-child,td.l,th.l{text-align:left}tr+tr td{border-top:1px solid var(--line)}.pos{color:var(--pos)}.neg{color:var(--neg)}
+.col{display:grid;gap:18px}.note{font-size:12px;color:var(--mut);margin-top:6px}
+.seats{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:12px}
+.seat{background:var(--card2);border-radius:8px;padding:12px;border-left:4px solid}.seat h4{margin:0;font-size:15px}.seat .sub{font-size:12px;color:var(--mut);min-height:34px;margin:2px 0 6px}
+.kv{display:flex;justify-content:space-between;font-size:12px;padding:1px 0}.kv b{font-variant-numeric:tabular-nums}
+.lv{display:grid;grid-template-columns:96px 1fr 52px;gap:6px;align-items:center;font-size:11px;margin:2px 0}.lv i{display:block;height:6px;border-radius:3px;background:#0006;overflow:hidden}.lv i s{display:block;height:100%}.lv span:last-child{text-align:right}
+.opened{margin-top:6px;font-size:11px;color:var(--mut)}
+#feed{max-height:330px;overflow:auto}#feed table{font-size:12px}#feed tr{cursor:pointer}#feed tr:hover td{background:var(--card2)}#feed tr.new td{background:#4ea1ff22}
+#sum{font-size:12px;margin:0 0 8px;display:flex;flex-wrap:wrap;gap:4px 16px}
+.charts{display:grid;grid-template-columns:1fr 1fr;gap:12px}canvas{width:100%;height:210px;display:block}
+#moments div{padding:5px 0;border-bottom:1px solid var(--line);font-size:13px;cursor:pointer}#moments div:hover{background:var(--card2)}#moments span{color:var(--acc);display:inline-block;width:64px}
+#insp h4{margin:0 0 2px;font-size:17px}#insp .tag{display:inline-block;font-size:11px;background:var(--card2);padding:1px 8px;border-radius:99px;margin-right:6px}
+@media(max-width:1000px){.main,.explain,.charts{grid-template-columns:1fr}.steps{grid-template-columns:1fr 1fr}}
+</style></head><body>
+<div class=wrap>
+<h1>Retail Simulator Arena — match replay</h1>
+<p class=mut>Seed __SEED__ · __ROUNDS__ rounds · balanced 25-region world (Bulgarian provinces). Press <b>Play</b> (or Space) and watch six retailers fight for the market.</p>
+<details class=big open><summary>How the competition works (read this first)</summary>
+<div class=steps>
+<div class=step><b>1</b><h2>Train</h2><p class=mut>Build a reinforcement-learning agent (PPO, SAC, …). It sets every business lever of one retailer each round.</p></div>
+<div class=step><b>2</b><h2>Self-check</h2><p class=mut>Play it for 1,000 rounds against four scripted rivals. <i>This page replays exactly that kind of match.</i></p></div>
+<div class=step><b>3</b><h2>Submit</h2><p class=mut>One checkpoint .zip + entry.json per team, filed as a GitHub issue before the deadline.</p></div>
+<div class=step><b>4</b><h2>Tournament</h2><p class=mut>The organizer plays all entries against each other (no scripted rivals), rotating seats. Highest total profit wins.</p></div></div>
+<div class=explain>
+<div class=card><h3>The world</h3><p>25 regions. Region 0 (Smolyan) is <b>stranded</b> — hatched, nobody can enter. Regions 1–24 cycle <b>METRO</b> (biggest demand), <b>AFFLUENT</b>, <b>LOYAL</b>, <b>FRONTIER</b> (smallest).</p></div>
+<div class=card><h3>The players</h3><p>2–6 seats, each starting with <b>one store</b> in its home METRO region (ringed on the map) and equal cash. Each round a seat sets price, marketing, assortment, promotion, service, loyalty, wages… and may <b>buy a store</b> in a new region for a one-time <b>__PRICE__</b>.</p></div>
+<div class=card><h3>The goal</h3><p><b>Score = cumulative profit</b>, after wage and warehouse penalties. More stores ≠ better: each store adds running cost and overhead, and cash can't go far below zero.</p></div></div>
+<div id=arch style="margin-top:12px"></div></details>
+</div>
+
+<div class=bar><button id=play>▶ Play</button><button class=sec id=prev>◀</button><button class=sec id=next>▶</button>
+<input id=r type=range min=1 value=1><span>Round <b id=rn></b> / <span id=rt></span></span><span class=phase id=phase></span>
+<label class=mut>speed <input id=sp type=range min=1 max=60 value=12></label><button class=sec id=end>Jump to final</button></div>
+
+<div class=wrap>
+<div class=main>
+<div class=col>
+<div class=card><h3>Region control — Bulgaria</h3>
+<svg id=mapsvg viewBox="__VB__"></svg>
+<div class=legend id=legend></div>
+<div class=note><b>How to read the map:</b> each region is tinted by the seat holding the largest share; the <b>pie</b> shows how the region's demand splits between the seats present (pie size = stores there). A <b>ring</b> marks a seat's home. A pulse = a store was bought this round. <b>Click a region</b> for details.</div></div>
+<div class=card id=insp><h3>Region inspector</h3><div id=inspbody></div></div>
+</div>
+<div class=col>
+<div class=card><h3>Standings (live)</h3><table id=lb></table>
+<div class=note>Score = cumulative profit. Profit/rd = this round only. Share = fraction of all demand captured. Revenue is cumulative.</div></div>
+<div class=card><h3>Key moments (click to jump)</h3><div id=moments></div></div>
+<div class=card><h3>Purchase audit log — every store bought</h3><div id=sum></div><div id=feed></div>
+<div class=note>Price = one-time expansion capex, same for every region in this world. Home stores are free starting stores. Cash is the buyer's cash at the end of that round.</div></div>
+</div></div>
+
+<div class=card style="margin-top:18px"><h3>What each seat is doing right now</h3><div class=seats id=seats></div>
+<div class=note>Scripted rivals keep levers fixed; a trained agent changes them every round.</div></div>
+
+<div class=charts style="margin-top:18px">
+<div class=card><h3>Cumulative score (dots = store purchases)</h3><canvas id=c1></canvas></div>
+<div class=card><h3>Market share</h3><canvas id=c2></canvas></div>
+<div class=card><h3>Cash (below 0 = overdraft)</h3><canvas id=c3></canvas></div>
+<div class=card><h3>Stores</h3><canvas id=c4></canvas></div></div>
+</div>
+
+<script>
+const D=__DATA__,M=__MAP__;
+const COL=["#2f6fed","#8a4fff","#e0a100","#d13c8f","#19a974","#e5602c"];
+const CLSN={METRO:"Biggest demand — every seat's home.",AFFLUENT:"Quality-seeking shoppers.",LOYAL:"Brand-loyal shoppers.",FRONTIER:"Smallest demand.",STRANDED:"Never enterable."};
+const N=D.seats.length,T=D.rounds.length,$=id=>document.getElementById(id),fmt=v=>Math.round(v).toLocaleString(),idx=[...Array(N).keys()];
+const NS="http://www.w3.org/2000/svg";let cur=0,timer=null,sel=null;$("r").max=T;$("rt").textContent=T;
+$("arch").innerHTML="<h3>The four scripted rivals</h3>"+Object.entries(D.archetypes).map(([k,v])=>`<p><b>${k}</b> — ${v}</p>`).join("");
+$("legend").innerHTML=D.seats.map((s,i)=>`<span><span class=dot style="background:${COL[i]}"></span>${s.name}${s.kind=="rl"?" (agent)":""} · home ${M.regions[s.home].name}</span>`).join("");
+$("legend").innerHTML+='<div class=cls>'+["METRO","AFFLUENT","LOYAL","FRONTIER"].map(c=>`<span><b>${c}</b> ${CLSN[c]}</span>`).join("")+'</div>';
+// ---- precompute
+const cum=[];{let a=new Array(N).fill(0);D.rounds.forEach(r=>{a=a.map((x,i)=>x+r.score[i]);cum.push(a.slice())})}
+const rev=[];{let a=new Array(N).fill(0);D.rounds.forEach(r=>{a=a.map((x,i)=>x+r.revenue[i]);rev.push(a.slice())})}
+const feed=D.seats.map((s,i)=>({t:-1,i,k:s.home}));D.rounds.forEach((r,t)=>r.opened.forEach((reg,i)=>reg.forEach(k=>feed.push({t,i,k}))));
+const moments=[];{let lead=-1;const neg=new Array(N).fill(false);const first=new Array(N).fill(false);
+D.rounds.forEach((r,t)=>{const l=idx.reduce((b,i)=>cum[t][i]>cum[t][b]?i:b,0);
+if(t>0&&l!=lead&&lead>=0)moments.push([t,`<b>${D.seats[l].name}</b> takes the lead from ${D.seats[lead].name}`]);lead=l;
+idx.forEach(i=>{if(!neg[i]&&cum[t][i]<0&&t>5){neg[i]=true;moments.push([t,`<b>${D.seats[i].name}</b> falls into negative cumulative profit`])}
+if(!first[i]&&r.opened[i].length&&t<T){first[i]=true;moments.push([t,`<b>${D.seats[i].name}</b> buys its first expansion store (${M.regions[r.opened[i][0]].name})`])}});});
+moments.sort((a,b)=>a[0]-b[0]);moments.push([T-1,`Final: <b>${D.seats[idx.reduce((b,i)=>cum[T-1][i]>cum[T-1][b]?i:b,0)].name}</b> wins with ${fmt(Math.max(...cum[T-1]))}`]);}
+$("moments").innerHTML=moments.map(m=>`<div onclick="go(${m[0]})"><span>rd ${m[0]+1}</span>${m[1]}</div>`).join("");
+// ---- map
+const svg=$("mapsvg");svg.innerHTML=`<defs><pattern id=h width=8 height=8 patternUnits=userSpaceOnUse patternTransform=rotate(45)><rect width=8 height=8 fill=#1b2130 /><line x1=0 y1=0 x2=0 y2=8 stroke=#394460 stroke-width=3 /></pattern></defs>`;
+const rg=[],pies=[],gp=document.createElementNS(NS,"g"),gr=document.createElementNS(NS,"g"),go2=document.createElementNS(NS,"g");svg.append(gr,gp,go2);
+M.regions.forEach((R,k)=>{const g=document.createElementNS(NS,"g");g.setAttribute("class","rg");const p=document.createElementNS(NS,"path");p.setAttribute("class","a");p.setAttribute("d",R.d);p.setAttribute("fill",k==0?"url(#h)":"#2a3347");
+g.appendChild(p);g.onclick=()=>{sel=k;render()};gr.appendChild(g);rg.push({g,p});
+const pg=document.createElementNS(NS,"g");pg.style.pointerEvents="none";gp.appendChild(pg);pies.push(pg);});
+// home rings + labels
+D.seats.forEach((s,i)=>{const R=M.regions[s.home];const c=document.createElementNS(NS,"circle");c.setAttribute("cx",R.cx);c.setAttribute("cy",R.cy);c.setAttribute("r",27);c.setAttribute("fill","none");c.setAttribute("stroke",COL[i]);c.setAttribute("stroke-width",3);c.setAttribute("stroke-dasharray","5 3");go2.appendChild(c)});
+M.regions.forEach((R,k)=>{const t=document.createElementNS(NS,"text");t.setAttribute("class","rn");t.setAttribute("x",R.cx);t.setAttribute("y",R.cy+(k==0?0:-30));t.textContent=R.name.split(" – ")[0];go2.appendChild(t)});
+function pie(el,cx,cy,r,vals){el.innerHTML="";const tot=vals.reduce((a,b)=>a+b,0);if(tot<=0)return;let a0=-Math.PI/2;const live=vals.map((v,i)=>[v,i]).filter(x=>x[0]>0);
+const bg=document.createElementNS(NS,"circle");bg.setAttribute("cx",cx);bg.setAttribute("cy",cy);bg.setAttribute("r",r+2);bg.setAttribute("fill","#10131a");el.appendChild(bg);
+live.forEach(([v,i])=>{const f=v/tot;let n;if(f>.9999){n=document.createElementNS(NS,"circle");n.setAttribute("cx",cx);n.setAttribute("cy",cy);n.setAttribute("r",r)}else{const a1=a0+f*2*Math.PI;n=document.createElementNS(NS,"path");
+n.setAttribute("d",`M${cx},${cy}L${cx+r*Math.cos(a0)},${cy+r*Math.sin(a0)}A${r},${r} 0 ${f>.5?1:0} 1 ${cx+r*Math.cos(a1)},${cy+r*Math.sin(a1)}Z`);a0=a1}
+n.setAttribute("fill",COL[i]);el.appendChild(n)})}
+// ---- charts
+function draw(c,series,t,o={}){const cv=$(c),x=cv.getContext("2d"),w=cv.width=cv.clientWidth*2,h=cv.height=420;x.clearRect(0,0,w,h);
+let lo=o.min??Infinity,hi=-Infinity;series.forEach(s=>s.forEach(v=>{lo=Math.min(lo,v);hi=Math.max(hi,v)}));if(hi==lo)hi=lo+1;
+const L=96,X=i=>L+i/(T-1||1)*(w-L-14),Y=v=>h-30-(v-lo)/(hi-lo)*(h-60),f=o.f||(v=>Math.abs(v)>=1000?(v/1000).toFixed(0)+"k":v.toFixed(0));
+x.font="22px sans-serif";x.fillStyle="#98a2b6";x.strokeStyle="#2a3347";x.lineWidth=1;
+for(let g=0;g<=4;g++){const v=lo+(hi-lo)*g/4;x.beginPath();x.moveTo(L,Y(v));x.lineTo(w,Y(v));x.stroke();x.fillText(f(v),0,Y(v)+7)}
+if(lo<0&&hi>0){x.strokeStyle="#98a2b6";x.beginPath();x.moveTo(L,Y(0));x.lineTo(w,Y(0));x.stroke()}
+series.forEach((s,i)=>{x.strokeStyle=COL[i];x.lineWidth=3;x.beginPath();s.forEach((v,k)=>k?x.lineTo(X(k),Y(v)):x.moveTo(X(k),Y(v)));x.stroke()});
+if(o.marks)feed.filter(e=>e.t>=0).forEach(e=>{x.fillStyle=COL[e.i];x.beginPath();x.arc(X(e.t),Y(series[e.i][e.t]),6,0,7);x.fill()});
+x.strokeStyle="#fffa";x.lineWidth=2;x.beginPath();x.moveTo(X(t),0);x.lineTo(X(t),h);x.stroke();
+cv.onclick=e=>{const b=cv.getBoundingClientRect();go(Math.max(0,Math.min(T-1,Math.round(((e.clientX-b.left)*2-L)/(w-L-14)*(T-1)))))}}
+function lv(n,v,k){const e=D.leverFmt[n]||{};return e.price?"×"+v.toFixed(2):e.tier?"tier "+Math.round(v):Math.round(v*100)+"%"}
+function go(t){cur=t;render()}
+let lastRender=-1;
+function render(){const t=cur,r=D.rounds[t];$("r").value=t+1;$("rn").textContent=t+1;
+const f=(t+1)/T;$("phase").textContent=f<.1?"Opening: land-grab":f<.5?"Expansion":f<.85?"Mid-game":"Late game";
+// map
+rg.forEach((o,k)=>{o.g.classList.toggle("sel",sel===k);if(k==0)return;const sh=r.rshare[k],st=r.rstores[k];let b=-1,bv=0;sh.forEach((v,i)=>{if(v>bv){bv=v;b=i}});
+o.p.setAttribute("fill",b<0?"#2a3347":COL[b]+"88");const tot=st.reduce((a,c)=>a+c,0);pie(pies[k],M.regions[k].cx,M.regions[k].cy,tot?10+3.5*Math.sqrt(tot):0,sh);
+o.g.setAttribute("aria-label",M.regions[k].name)});
+go2.querySelectorAll(".pulse").forEach(n=>n.remove());
+if(lastRender!==t)r.opened.forEach((reg,i)=>reg.forEach(k=>{const c=document.createElementNS(NS,"circle");c.setAttribute("class","pulse");c.setAttribute("cx",M.regions[k].cx);c.setAttribute("cy",M.regions[k].cy);c.setAttribute("stroke",COL[i]);go2.appendChild(c)}));
+lastRender=t;
+// standings
+const order=idx.slice().sort((a,b)=>cum[t][b]-cum[t][a]);
+$("lb").innerHTML="<tr><th>#<th class=l>Seat<th>Score<th>Profit/rd<th>Revenue<th>Cash<th>Share<th>Stores</tr>"+order.map((i,p)=>`<tr><td>${p==0?"🥇":p==1?"🥈":p==2?"🥉":p+1}<td class=l><span class=dot style="background:${COL[i]}"></span>${D.seats[i].name} <span class=mut>${D.seats[i].kind=="rl"?"RL":"NPC"}</span><td class=${cum[t][i]<0?"neg":""}>${fmt(cum[t][i])}<td class=${r.profit[i]<0?"neg":"pos"}>${fmt(r.profit[i])}<td>${fmt(rev[t][i])}<td class=${r.cash[i]<0?"neg":""}>${fmt(r.cash[i])}<td>${(r.share[i]*100).toFixed(1)}%<td>${r.stores[i]}`).join("");
+// audit
+const ev=feed.filter(e=>e.t<=t).reverse();
+$("sum").innerHTML=D.seats.map((s,i)=>{const n=ev.filter(e=>e.i==i&&e.t>=0).length;return `<span><span class=dot style="background:${COL[i]}"></span>${s.name}: ${n} bought · ${fmt(n*D.price)} spent</span>`}).join("");
+$("feed").innerHTML="<table><tr><th>Round<th class=l>Buyer<th class=l>Region<th class=l>Type<th>Price<th>Cash after<th>Stores</tr>"+ev.map(e=>{const c=e.t<0?"–":fmt(D.rounds[e.t].cash[e.i]),n=e.t<0?1:D.rounds[e.t].stores[e.i];return `<tr class="${e.t==t?"new":""}" onclick="go(${Math.max(e.t,0)})"><td>${e.t<0?"start":e.t+1}<td class=l><span class=dot style="background:${COL[e.i]}"></span>${D.seats[e.i].name}<td class=l>${M.regions[e.k].name}<td class=l>${D.classes[e.k]}<td>${e.t<0?"free":fmt(D.price)}<td>${c}<td>${n}`}).join("")+"</table>";
+// inspector
+const k=sel;if(k==null){$("inspbody").innerHTML="<p class=mut>Click any region on the map to see its demand, who is present, and how shares evolved.</p>"}else{
+const R=M.regions[k],sh=r.rshare[k],st=r.rstores[k];
+$("inspbody").innerHTML=`<h4>${k}. ${R.name}</h4><p><span class=tag>${D.classes[k]}</span><span class=tag>base demand ${k==0?"–":fmt(D.demand[k])}</span><span class=tag>${k==0?"cannot be entered":"open price "+fmt(D.price)}</span></p>`+
+(k==0?`<p class=mut>Stranded: present in the world but nobody can ever enter it.</p>`:`<table><tr><th class=l>Seat<th>Stores<th>Share</tr>${order.map(i=>`<tr><td class=l><span class=dot style="background:${COL[i]}"></span>${D.seats[i].name}<td>${st[i]}<td>${(sh[i]*100).toFixed(1)}%`).join("")}</table><canvas id=ci style="height:150px;margin-top:8px"></canvas><div class=note>Share of this region over time.</div>`);
+if(k>0)draw("ci",idx.map(i=>D.rounds.map(x=>x.rshare[k][i])),t,{min:0,f:v=>(v*100).toFixed(0)+"%"})}
+// seats
+if(!window._se){window._se=idx.map(i=>{const d=document.createElement("div");d.className="seat";d.style.borderColor=COL[i];$("seats").appendChild(d);return d})}
+window._se.forEach((el,i)=>{const s=D.seats[i],l=r.levers[i];const own=r.rstores.map((x,k)=>x[i]?M.regions[k].name:null).filter(Boolean);
+el.innerHTML=`<h4>${s.name} <span class=mut style="font-size:11px">${s.kind=="rl"?"RL agent":"scripted"}</span></h4><div class=sub>${s.kind=="rl"?"Trained agent — changes levers every round.":D.archetypes[s.name]||""}</div>`+
+`<div class=kv><span>Happiness</span><b>${(r.happy[i]*100).toFixed(0)}%</b></div><div class=kv><span>Stores</span><b>${r.stores[i]}</b></div><div class=kv style="margin-bottom:6px"><span>Present in</span><b style="text-align:right;max-width:60%">${own.join(", ")}</b></div>`+
+D.leverNames.map(n=>{const v=l[n]??0,e=D.leverFmt[n]||{},w=e.price?(v-.5)/1.5:e.tier?v/2:v;return `<div class=lv><span>${n.replace(/_/g," ")}</span><i><s style="width:${Math.max(0,Math.min(1,w))*100}%;background:${COL[i]}"></s></i><span>${lv(n,v)}</span></div>`}).join("")+
+`<div class=opened>${r.opened[i].length?"Bought this round: "+r.opened[i].map(k=>M.regions[k].name).join(", "):"No purchase this round"}</div>`});
+draw("c1",idx.map(i=>cum.map(c=>c[i])),t,{marks:1});draw("c2",idx.map(i=>D.rounds.map(x=>x.share[i])),t,{min:0,f:v=>(v*100).toFixed(0)+"%"});
+draw("c3",idx.map(i=>D.rounds.map(x=>x.cash[i])),t);draw("c4",idx.map(i=>D.rounds.map(x=>x.stores[i])),t,{min:0});}
+$("r").oninput=e=>go(+e.target.value-1);
+$("prev").onclick=()=>go(Math.max(0,cur-1));$("next").onclick=()=>go(Math.min(T-1,cur+1));$("end").onclick=()=>{stop();go(T-1)};
+function stop(){clearInterval(timer);timer=null;$("play").textContent="▶ Play"}
+function start(){$("play").textContent="⏸ Pause";timer=setInterval(()=>{if(cur>=T-1)return stop();cur++;render()},1000/$("sp").value)}
+$("play").onclick=()=>{if(timer)return stop();if(cur>=T-1)cur=0;start()};
+$("sp").oninput=()=>{if(timer){stop();start()}};
+addEventListener("keydown",e=>{if(e.target.tagName=="INPUT")return;if(e.code=="Space"){e.preventDefault();$("play").click()}if(e.code=="ArrowRight")$("next").click();if(e.code=="ArrowLeft")$("prev").click()});
+addEventListener("resize",render);render();
+</script></body></html>
