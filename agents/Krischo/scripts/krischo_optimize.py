@@ -58,6 +58,7 @@ BASELINE: dict[str, float] = {
     "k_mkt": 0.0,  # marketing rises when share is low
     "k_wh": 0.0,  # warehouse spend rises with the last stockout rate
     "k_wage": 0.0,  # wage spend rises when employee happiness is low
+    "k_wage_h": 0.0,  # wage spend rises with (1 - happiness): Orcho's recipe is 0.45 + 4 * (1 - happiness)
     "cap_cut": 0,  # 1 = halve marketing where share sits at the 0.6 cap
     # reads rivals (needs research > 0): price toward the rivals' mean, marketing with competition, contested-region logic
     "w_rival": 0.0,  # weight of the rival-price target in the price (0 = ignore rivals)
@@ -159,7 +160,8 @@ class Expert:
         if p["cap_cut"] and share >= 0.55:
             marketing *= 0.5
         warehouse = min(1.0, p["warehouse"] + p["k_wh"] * float(obs[idx["last_stockout_rate"]]))
-        wage = min(1.0, p["wage_spend"] + p["k_wage"] * max(0.0, 0.5 - float(obs[idx["employee_happiness"]])))
+        happiness = float(obs[idx["employee_happiness"]])
+        wage = min(1.0, p["wage_spend"] + p["k_wage"] * max(0.0, 0.5 - happiness) + p["k_wage_h"] * (1.0 - happiness))
         return encode_action(
             StructuredAction(
                 levers={

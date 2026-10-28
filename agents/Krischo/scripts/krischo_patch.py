@@ -70,6 +70,8 @@ def main() -> None:
     parser.add_argument("--pool", default="runs/league2/pool.json")
     parser.add_argument("--wage", type=float, default=None, help="target mean wage_spend (e.g. 0.5)")
     parser.add_argument("--expansion", action="store_true", help="re-fit the expansion head")
+    parser.add_argument("--wage-delta", type=float, default=0.0, help="add this to the wage_spend output bias on top of the current zip")
+    parser.add_argument("--warehouse", type=float, default=0.0, help="add this to the warehouse_invest output bias (negative lowers it)")
     parser.add_argument("--research", type=float, default=0.0, help="add this to the research output bias")
     parser.add_argument("--boost", type=float, default=0.0, help="add this to the expansion logits of --boost-classes")
     parser.add_argument("--boost-classes", default="1", help="comma list: 0 METRO, 1 AFFLUENT, 2 LOYAL, 3 FRONTIER")
@@ -92,6 +94,18 @@ def main() -> None:
             before = float(head.bias[slot])
             head.bias[slot] += args.wage - 0.04  # the agent's mean wage output is ~0.04
         print(f"wage_spend output bias {before:.3f} -> {float(head.bias[slot]):.3f} (target mean {args.wage})", flush=True)
+
+    if args.wage_delta:
+        slot = LAYOUT["wage_spend"].offset
+        with torch.no_grad():
+            head.bias[slot] += args.wage_delta
+        print(f"wage_spend output bias {args.wage_delta:+}", flush=True)
+
+    if args.warehouse:
+        slot = LAYOUT["warehouse_invest"].offset
+        with torch.no_grad():
+            head.bias[slot] += args.warehouse
+        print(f"warehouse_invest output bias {args.warehouse:+}", flush=True)
 
     if args.research:
         slot = LAYOUT["research"].offset
