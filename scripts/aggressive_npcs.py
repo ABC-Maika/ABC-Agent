@@ -29,11 +29,19 @@ AGGRESSIVE_DESCRIPTIONS = {
     "behind it.",
     "orcho-recipe": "SCRIPTED best-known recipe from our lever tests (not a trained checkpoint): "
     "max price and marketing, wages paid so staff stay happy, stops expanding at 10 stores.",
+    "orcho-recipe2": "SCRIPTED v2 recipe: opens the biggest-demand regions first (METRO, AFFLUENT, "
+    "LOYAL, FRONTIER), up to 12 stores; staff pay 0.45, research 0.2.",
 }
 AGGRESSIVE_LABELS: tuple[str, ...] = tuple(AGGRESSIVE_DESCRIPTIONS)
 
 
-def _recipe_predict(target_fn: Callable[[Any, int], int], n_regions: int, n_obs: int) -> Any:
+def _recipe_predict(
+    target_fn: Callable[[Any, int], int],
+    n_regions: int,
+    n_obs: int,
+    wage_spend: float = 0.5,
+    research: float = 0.0,
+) -> Any:
     """Fixed levers (the wage lever is not exposed by the organizer's wrapper) + a store-capped rule."""
     from retail_simulator.core.encoding import encode_action
 
@@ -51,12 +59,12 @@ def _recipe_predict(target_fn: Callable[[Any, int], int], n_regions: int, n_obs:
                 assortment=1.0,
                 promotion=1.0,
                 expansion_choice=target_fn(obs, t),
-                research=0.0,
+                research=research,
                 service_level=1.0,
                 automation_tier=0,
                 loyalty_spend=0.0,
                 n_regions=n_regions,
-                wage_spend=0.5,
+                wage_spend=wage_spend,
                 warehouse_invest=0.0,
             )
         )
@@ -86,6 +94,13 @@ def _aggressive_roster(n_regions: int, region_table: Any) -> dict[str, Callable[
             return 0
         return geo._sprawler_target(obs, idx=idx, n_regions=n_regions)
 
+    def biggest_first(obs: Any, _tick: int) -> int:
+        """Up to 12 stores, the highest-demand class first (class cycle from region 1)."""
+        if float(obs[idx["stores"]]) >= 12:
+            return 0
+        empty = list(geo._own_empty_regions(obs, idx=idx, candidates=range(1, n_regions)))
+        return min(empty, key=lambda r: ((r - 1) % 4, r)) if empty else 0
+
     shared = {"n_regions": n_regions, "n_obs": len(idx), "research": 0.0, "automation_tier": 0}
     return {
         "cherry-picker+": geo._make_predict(
@@ -109,6 +124,9 @@ def _aggressive_roster(n_regions: int, region_table: Any) -> dict[str, Callable[
             **shared,
         ),
         "orcho-recipe": _recipe_predict(capped_sprawl, n_regions, len(idx)),
+        "orcho-recipe2": _recipe_predict(
+            biggest_first, n_regions, len(idx), wage_spend=0.45, research=0.2
+        ),
         "sprawler+": geo._make_predict(
             sprawl,
             price=0.7,
