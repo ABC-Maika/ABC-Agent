@@ -11,3 +11,6 @@ __pycache__/
 # Written to the repo root by the README self-check
 /results.json
 /decisions.csv
+
+# Local Claude Code config (not shared)
+.claude/
