@@ -2,6 +2,8 @@ runs/
 .venv/
 __pycache__/
 *.zip
+# Team agent checkpoints are shared through git (final round only)
+!agents/**/*.zip
 *.egg-info/
 .mypy_cache/
 .ruff_cache/
