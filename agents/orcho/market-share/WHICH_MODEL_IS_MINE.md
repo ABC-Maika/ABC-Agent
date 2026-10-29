@@ -1,19 +1,18 @@
 # Which model is Orcho's (for whoever tests it in the playground)
 
 **Add this file:** `agents/orcho/market-share/checkpoint.zip`
-**Agent name to show:** `orcho-a2c` (version 4)
+**Agent name to show:** `orcho-a2c` (version 5)
 **Algorithm / policy:** A2C, `MlpPolicy` (declare `a2c-mlp`). Stable-Baselines3 2.9.2.
 **Entry file:** `agents/orcho/market-share/entry.json` (team and contact still say TODO: fill them in before submitting).
 
 ## What it is
-A normal SB3 A2C checkpoint trained by **imitation**: the scripted recipe `orcho-recipe3` in
+A normal SB3 A2C checkpoint trained by **imitation**: the scripted recipe `orcho-recipe4` in
 `scripts/aggressive_npcs.py` played matches and the A2C policy was fitted to copy it
-(`scripts/clone_recipe.py --expert orcho-recipe3 --see employee_happiness`, 26,000 samples incl. 3
+(`scripts/clone_recipe.py --expert orcho-recipe4 --see employee_happiness`, 26,000 samples incl. 3
 DAgger rounds). It reads its own store counts and its staff happiness. No custom code in the zip.
 The recipe is deliberately aggressive:
-- **Ring expansion:** opens the six METRO regions as a ring, always continuing from the end of the
-  chain it already holds (so copies of it walk to different neighbours instead of all piling into
-  regions 1, 5 and 9), then the AFFLUENT regions, up to **12 stores**
+- **Highest-number-first expansion (v5):** opens the METRO regions, then the AFFLUENT regions, highest
+  region number first (most agents open lowest number first, so this dodges their crowd), up to **12 stores**
 - price 2.0; marketing, assortment, promotion and service all at the maximum (1.0); research 0.2
 - **smart pay:** staff pay 0.45 while staff are happy, raised up to 1.0 as happiness drops
   (`0.45 + 4 * (1 - happiness)`). The wage staff demand rises with your market share, so a fixed
@@ -31,7 +30,16 @@ The recipe is deliberately aggressive:
 `A2C.load("agents/orcho/market-share/checkpoint.zip")` also works. Deterministic, 318-D observation
 in, 44-D action out, no VecNormalize, nothing read at decision time.
 
-## Results (practice only, not the final scoring; 6 matches per cell, every home rotation)
+## v5 vs v4 (6 home rotations each)
+| Lineup | v4 | v5 |
+|---|---|---|
+| newest agents, seeds 0 / 1 / 2 | 575,755 / 565,325 / 562,749 | **689,158 / 664,373 / 690,702** (18/18 wins) |
+| hunter bots + krischo-lstm | 667,465 (worst -315,140) | 673,150 (worst -263,994) |
+| 5 Krischo mlp-v6 | 314,612 (worst -275,156) | **434,365** (worst +186,072) |
+| old team lineup | 1,055,478 (6/6) | 1,004,086 (5/6) |
+| organizer self-check | 3,233,077 | 3,140,507 |
+
+## Results of v4 (practice only, not the final scoring; 6 matches per cell, every home rotation)
 | Lineup | orcho-a2c v4 | Wins | Next best |
 |---|---|---|---|
 | teammates + 2 trained A2C rivals (seed 0) | **1,055,478** | **6 / 6** | krischo 869,400 |
