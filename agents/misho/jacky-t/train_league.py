@@ -45,6 +45,8 @@ from stable_baselines3.common.vec_env import DummyVecEnv  # noqa: E402
 
 from retail_simulator.envs.arena import arena_balanced_config, arena_home_regions  # noqa: E402
 from retail_simulator.envs.arena_match import _materialize_predicts  # noqa: E402
+from retail_simulator.envs.geo_archetypes import _name_to_index as geo_name_to_index  # noqa: E402
+from retail_simulator.envs.geo_archetypes import geo_archetypes  # noqa: E402
 from retail_simulator.envs.parallel_env import RetailParallelEnv  # noqa: E402
 from retail_simulator.envs.spaces import build_action_space, build_observation_space  # noqa: E402
 
@@ -71,8 +73,22 @@ class LeagueEnv(gym.Env):
         penalty: float,
         rank_warmup: int,
         ticks: int = 1000,
+        neg_penalty: float = 0.0,
+        pool: Sequence[str] | None = None,
+        any_home: bool = False,
+        prime_weight: float = 0.0,
     ) -> None:
         super().__init__()
+        # ``prime_weight``: extra reward per tick for the demand-weighted market share held in the
+        # METRO (1, 5, 9, ...) and AFFLUENT (2, 6, 10, ...) regions, the two biggest-demand classes
+        # (mean base demand 1,400 and 900, against 600 and 350 for LOYAL and FRONTIER).
+        self.prime_weight = prime_weight
+        # ``any_home``: draw the six homes from all enterable regions (1..24), not only the six
+        # published metro homes, so the policy is not tied to one starting geography.
+        self.any_home = any_home
+        # ``pool``: the five opponents (OPPONENTS keys or geo archetype names); default: all five.
+        self.pool = list(pool) if pool is not None else list(OPPONENTS)
+        self.neg_penalty = neg_penalty
         self.np_random, _ = seeding.np_random(seed)
         profit, revenue, share, loyalty = weights
         base_config = arena_balanced_config()
@@ -90,11 +106,20 @@ class LeagueEnv(gym.Env):
         self.scale = obs_scale.astype(np.float32)
         self.bonus, self.penalty, self.rank_warmup, self.ticks = bonus, penalty, rank_warmup, ticks
         self.homes = arena_home_regions(N_SEATS)
+        regions = self.config.demand.regions
+        obs_index = geo_name_to_index(len(regions))
+        prime = [r for r in range(1, len(regions)) if (r - 1) % 4 in (0, 1)]  # METRO, AFFLUENT
+        demand = np.array([regions[r].base_regional_demand for r in prime], dtype=np.float64)
+        self._prime_idx = [obs_index[f"market_share_region_{r}"] for r in prime]
+        self._prime_w = demand / demand.sum()
         self.observation_space = build_observation_space(self.config)
         self.action_space = jacky.base.bounded_logit_space(build_action_space())
         self._predicts: dict[str, Any] = {}
 
     def _predict(self, name: str) -> Any:
+        if name not in OPPONENTS:  # a scripted archetype: a fresh closure, it carries a tick counter
+            roster = geo_archetypes(len(self.config.demand.regions), self.config.demand.regions)
+            return roster[name]
         if name not in self._predicts:
             self._predicts.update(
                 _materialize_predicts(
@@ -108,8 +133,13 @@ class LeagueEnv(gym.Env):
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None) -> Any:
         super().reset(seed=seed)
         rng = random.Random(int(self.np_random.integers(0, 2**31 - 1)))
-        homes = tuple(int(h) for h in self.np_random.permutation(self.homes))
-        names = list(OPPONENTS)
+        if self.any_home:
+            n_regions = len(self.config.demand.regions)
+            drawn = self.np_random.choice(np.arange(1, n_regions), size=N_SEATS, replace=False)
+            homes = tuple(int(h) for h in drawn)
+        else:
+            homes = tuple(int(h) for h in self.np_random.permutation(self.homes))
+        names = list(self.pool)
         rng.shuffle(names)
         self.opponents = [self._predict(name) for name in names]
         self.world = RetailParallelEnv(
@@ -136,6 +166,9 @@ class LeagueEnv(gym.Env):
         self.t += 1
         self.cum += [infos[a]["components"]["profit"] for a in self.agents_]
         reward = float(rewards[self.agents_[LEARNER]]) + self._rank_shaping()
+        if self.prime_weight:
+            shares = np.asarray(self._obs[self.agents_[LEARNER]])[self._prime_idx]
+            reward += self.prime_weight * float(shares @ self._prime_w)
         rank = int((self.cum > self.cum[LEARNER]).sum()) + 1
         return self._learner_obs(), reward, False, self.t >= self.ticks, {"rank": rank}
 
@@ -145,11 +178,12 @@ class LeagueEnv(gym.Env):
         mine = self.cum[LEARNER]
         rivals = np.delete(self.cum, LEARNER)
         rank = int((rivals > mine).sum()) + 1
+        shaping = -self.neg_penalty if mine < 0 else 0.0  # losing money overall
         if rank > 2:
-            return -self.penalty
+            return shaping - self.penalty
         if rank == 1 and mine > 0 and mine - rivals.max() > 0.5 * mine:
-            return self.bonus
-        return 0.0
+            return shaping + self.bonus
+        return shaping
 
     def _learner_obs(self) -> np.ndarray:
         return (self._obs[self.agents_[LEARNER]] / self.scale).astype(np.float32)
@@ -162,7 +196,15 @@ def make_env_fns(args: argparse.Namespace, obs_scale: np.ndarray) -> list[Any]:
     return [
         lambda s=s: Monitor(
             LeagueEnv(
-                s, obs_scale, args.reward_weights, args.bonus, args.penalty, args.rank_warmup
+                s,
+                obs_scale,
+                args.reward_weights,
+                args.bonus,
+                args.penalty,
+                args.rank_warmup,
+                neg_penalty=args.neg_penalty,
+                any_home=args.any_home,
+                prime_weight=args.prime_weight,
             ),
             info_keywords=("rank",),
         )
@@ -184,6 +226,17 @@ def train(args: argparse.Namespace) -> TQC:
     # The replay buffer is not part of a snapshot: refill it before updating, or the first
     # updates would overfit a handful of transitions.
     model.learning_starts = done + args.learning_starts
+    sample_action = None
+    if args.from_actor:
+        # Use the cloned actor from step one instead of SB3's random warm-up actions, and a small
+        # learning rate so the first updates (critics still stale) do not undo the clone.
+        from stable_baselines3.common.utils import get_schedule_fn
+
+        model.lr_schedule = get_schedule_fn(args.lr)
+        sample_action = model._sample_action
+        model._sample_action = lambda ls, action_noise=None, n_envs=1: sample_action(
+            0, action_noise, n_envs
+        )
     ckpt_dir = Path("runs") / args.label / "league_ckpt"
     callback = CheckpointCallback(
         save_freq=max(args.checkpoint_freq // args.n_envs, 1),
@@ -193,6 +246,8 @@ def train(args: argparse.Namespace) -> TQC:
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     np.save(ckpt_dir / "obs_scale.npy", obs_scale)
     model.learn(total_timesteps=remaining, callback=callback, reset_num_timesteps=False)
+    if sample_action is not None:
+        del model._sample_action  # the lambda must not be pickled into the saved zip
 
     # Fold the obs scale in, checking the network is unchanged on observations of this env.
     env = LeagueEnv(args.seed + 1, obs_scale, args.reward_weights, 0.0, 0.0, 0)
@@ -224,6 +279,28 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--bonus", type=float, default=0.25, help="per tick, lead > half own score")
     parser.add_argument("--penalty", type=float, default=0.25, help="per tick, outside the top 2")
     parser.add_argument("--rank-warmup", type=int, default=50, help="ticks before rank terms apply")
+    parser.add_argument(
+        "--neg-penalty", type=float, default=0.0, help="per tick while cumulative profit is below 0"
+    )
+    parser.add_argument(
+        "--from-actor",
+        action="store_true",
+        help="the snapshot is a behaviour-cloned actor: act with it from the first step (no random "
+        "warm-up), keep its low noise and use a small learning rate",
+    )
+    parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument(
+        "--prime-weight",
+        type=float,
+        default=0.0,
+        help="per-tick reward x the demand-weighted market share in METRO and AFFLUENT regions",
+    )
+    parser.add_argument(
+        "--any-home",
+        action="store_true",
+        help="draw the six homes from all 24 enterable regions each episode (default: the six "
+        "published metro homes, shuffled over the seats)",
+    )
     parser.add_argument(
         "--reward-weights",
         type=lambda text: tuple(float(part) for part in text.split(",")),

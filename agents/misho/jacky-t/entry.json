@@ -3,6 +3,6 @@
   "agent_name": "Jacky-T",
   "policy_kind": "tqc",
   "contact": "orlinss2008@gmail.com",
-  "training_recipe": "agents/misho/jacky-t/train.py (80k steps vs the four NPCs) then train_league.py (20k steps vs Krischo, Yavkata, orcho and Jack): TQC MlpPolicy, weighted reward 0.3/0.3/0.3/0.1 plus top-2 rank penalty and lead bonus, expansion masking, obs scale folded into the network",
+  "training_recipe": "agents/misho/jacky-t: TQC MlpPolicy, 100k RL steps (train.py then train_league.py), then actor behaviour-cloned from Orcho and KrischoV8 play (mimic.py collect + bc); obs scale folded into the network, expansion masking, six-seat league",
   "sb3_version": "2.9.2"
 }
