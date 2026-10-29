@@ -113,6 +113,7 @@ class LeagueEnv(gym.Env):
         open_bonus_ticks: int = 200,
         happy_penalty: float = 0.0,
         research_pulse: bool = False,
+        open_value: bool = False,
         research_cap: float | None = None,
         raw_profit_scale: float | None = None,
         lead_shaping: float = 0.0,
@@ -138,10 +139,11 @@ class LeagueEnv(gym.Env):
         self.open_bonus_ticks = open_bonus_ticks
         self.happy_penalty = happy_penalty
         self.research_pulse = research_pulse
+        self.open_value = open_value
+        self._owned = np.zeros(0, dtype=bool)
         self._research_at = next(
             s.offset for s in flatten_action_space_layout().levers if s.spec.name == "research"
         )
-        self._stores = 1
         # ``prime_weight``: extra reward per tick for the demand-weighted market share held in the
         # METRO (1, 5, 9, ...) and AFFLUENT (2, 6, 10, ...) regions, the two biggest-demand classes
         # (mean base demand 1,400 and 900, against 600 and 350 for LOYAL and FRONTIER).
@@ -225,7 +227,7 @@ class LeagueEnv(gym.Env):
         self.t = 0
         self.episodes += 1
         self._lead_phi = 0.0
-        self._stores = 1
+        self._owned = np.asarray(self.world._state.retailers[LEARNER].stores_per_region) > 0
         return self._learner_obs(), {"homes": homes, "opponents": names}
 
     def step(self, action: np.ndarray) -> Any:
@@ -250,9 +252,24 @@ class LeagueEnv(gym.Env):
         if self.open_bonus and self.t <= self.open_bonus_ticks:
             # Aggression: a one-off reward each time the learner opens a new region (the clone stalls
             # at 3 stores when a rival contests its regions; the teachers keep expanding to 12).
-            stores = int(np.sum(self.world._state.retailers[LEARNER].stores_per_region))
-            reward += self.open_bonus * max(0, stores - self._stores)
-            self._stores = stores
+            retailers = self.world._state.retailers
+            mine = np.asarray(retailers[LEARNER].stores_per_region) > 0
+            if self.open_value:
+                # Value of a region = its demand split over the agents already there (with equal
+                # levers an agent gets 1/n of a region): METRO 1400, AFFLUENT 900, LOYAL 600, FRONTIER
+                # 350, divided by (rivals present + 1). The bonus is scaled so a METRO with one rival
+                # (700) pays the base bonus; crowded regions pay less, so a lower class wins there.
+                demand = np.array([r.base_regional_demand for r in self.config.demand.regions])
+                rivals = sum(
+                    (np.asarray(retailers[k].stores_per_region) > 0).astype(int)
+                    for k in range(N_SEATS)
+                    if k != LEARNER
+                )
+                gained = mine & ~self._owned
+                reward += self.open_bonus * float((demand / (1 + rivals) / 700.0)[gained].sum())
+            else:
+                reward += self.open_bonus * int((mine & ~self._owned).sum())
+            self._owned = self._owned | mine
         if self.happy_penalty:
             # Unpaid staff (happiness near 0) trigger the write-off penalty; RL drove wages to ~0.02.
             happy = float(self.world._state.retailers[LEARNER].employee_happiness)
@@ -316,6 +333,7 @@ def make_one(seed: int, obs_scale: np.ndarray, args: argparse.Namespace) -> Moni
             open_bonus=args.open_bonus,
             happy_penalty=args.happy_penalty,
             research_pulse=args.research_pulse,
+            open_value=args.open_value,
             research_cap=args.research_cap,
             raw_profit_scale=args.raw_profit_scale,
             lead_shaping=args.lead_shaping,
@@ -478,6 +496,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--open-bonus", type=float, default=0.0, help="reward per newly opened region")
     parser.add_argument("--happy-penalty", type=float, default=0.0)
     parser.add_argument("--research-pulse", action="store_true")
+    parser.add_argument("--open-value", action="store_true")
     parser.add_argument(
         "--pool", nargs="+", default=None, help="opponent names to draw from (default: the full league)"
     )
