@@ -79,9 +79,10 @@ def rollout(job: tuple[str, dict, list, int]) -> tuple[np.ndarray, np.ndarray, f
 
     zip_path, params, opps, seed = job
     rng = np.random.default_rng(seed)
-    homes = tuple(int(h) for h in rng.permutation(kl.HOMES))
+    n_seats = len(opps) + 1  # 6 = final format; 4 = battle format with the first four homes
+    homes = tuple(int(h) for h in rng.permutation(kl.HOMES[:n_seats]))
     world_seed = int(rng.integers(0, 2**31 - 1))
-    env = RetailParallelEnv(arena_balanced_config(), n_learning_agents=kl.N_SEATS, home_regions=homes, seed=world_seed, mask_expansion_seats=tuple(range(kl.N_SEATS)))
+    env = RetailParallelEnv(arena_balanced_config(), n_learning_agents=n_seats, home_regions=homes, seed=world_seed, mask_expansion_seats=tuple(range(n_seats)))
     agents = env.possible_agents
     learner = kz.ZipAny(zip_path)
     teacher = ko.Expert(params)
@@ -126,6 +127,7 @@ def main() -> None:
     ap.add_argument("--zips", nargs="*", default=[], help="real agent zips used as opponents in DAgger rollouts")
     ap.add_argument("--zips-frac", type=float, default=0.7)
     ap.add_argument("--zips-k", type=int, default=3, help="how many zip opponents per rollout")
+    ap.add_argument("--frac4", type=float, default=0.0, help="share of DAgger rollouts played as 4-seat matches")
     ap.add_argument("--init", default=None, help="folded checkpoint zip whose actor weights start the clone (e.g. mlp-v9)")
     ap.add_argument("--threads", type=int, default=4)
     ap.add_argument("--workers", type=int, default=8)
@@ -215,6 +217,8 @@ def main() -> None:
                 opps = [args.orcho, *kl.draw(pool, seed, 4)]
             else:
                 opps = kl.draw(pool, seed, 5)
+            if r.random() < args.frac4:
+                opps = opps[:3]  # a 4-seat match: the clone must not depend on how many rivals there are
             jobs.append((args.out, params, opps, seed))
         with ProcessPoolExecutor(max_workers=args.workers) as ex:
             res = list(ex.map(rollout, jobs, chunksize=1))
@@ -230,5 +234,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 

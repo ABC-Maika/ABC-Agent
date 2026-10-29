@@ -212,7 +212,17 @@ VARIANTS = {  # name -> (mode, param overrides, frugal opening ticks, frugal ope
     "kv-M1": ("lowest", {"wage_stores": 0, "contest_pen": 1.5, "k_wage_h": 4.0, "service": 0.2, "research": 0.1, "max_stores": 10}, 2, None),
     "kv-M2": ("lowest", {"wage_stores": 0, "contest_pen": 1.5, "k_wage_h": 2.0, "service": 0.2, "research": 0.1, "max_stores": 10}, 2, None),
     "kv-M3": ("lowest", {"wage_stores": 0, "contest_pen": 1.5, "k_wage_h": 2.0, "service": 0.5}, 2, None),    "kv-M4": ("lowest", {"wage_stores": 0, "contest_pen": 1.5, "k_wage_h": 2.0, "service": 0.2}, 2, None),
-    "kv-M5": ("lowest", {"wage_stores": 0, "contest_pen": 1.5, "k_wage_h": 2.0, "max_stores": 10}, 2, None),    "kv-Z1": ("softhigh", {"wage_stores": 0, "k_wage_h": 2.0, "contest_pen": 0.3}, 2, None),
+    "kv-M5": ("lowest", {"wage_stores": 0, "contest_pen": 1.5, "k_wage_h": 2.0, "max_stores": 10}, 2, None),    # elite-field candidates (Yavkata's lean numbers: service 0.15, price 1.9, research 0)
+    "kv-E1": ("high", {"wage_stores": 0, "k_wage_h": 4.0, "service": 0.15, "price": 1.9, "research": 0.0}, 2, None),
+    "kv-E2": ("lowest", {"wage_stores": 0, "contest_pen": 1.5, "k_wage_h": 4.0, "service": 0.15, "price": 1.9, "research": 0.0}, 2, None),
+    "kv-E3": ("lowest", {"wage_stores": 0, "contest_pen": 1.5, "k_wage_h": 2.0, "service": 0.15, "price": 1.9, "research": 0.0}, 2, None),
+    "kv-E4": ("high", {"wage_stores": 0, "k_wage_h": 4.0, "service": 0.15, "price": 1.9, "research": 0.0}, 0, None),    # around E3 for the elite6 homes 9 / 13
+    "kv-F1": ("lowest", {"wage_stores": 0, "service": 0.15, "price": 1.9, "research": 0.0, "contest_pen": 3.0, "k_wage_h": 2.0}, 2, None),
+    "kv-F2": ("lowest", {"wage_stores": 0, "service": 0.15, "price": 1.9, "research": 0.0, "contest_pen": 0.6, "k_wage_h": 2.0}, 2, None),
+    "kv-F3": ("lowest", {"wage_stores": 0, "service": 0.15, "price": 1.9, "research": 0.0, "contest_pen": 1.5, "k_wage_h": 1.0}, 2, None),
+    "kv-F4": ("lowest", {"wage_stores": 0, "service": 0.15, "price": 1.9, "research": 0.0, "contest_pen": 1.5, "k_wage_h": 2.0, "wage_spend": 0.40}, 2, None),
+    "kv-F5": ("lowest", {"wage_stores": 0, "service": 0.15, "price": 1.9, "research": 0.0, "contest_pen": 1.5, "k_wage_h": 2.0}, 3, None),
+    "kv-F6": ("lowest", {"wage_stores": 0, "service": 0.15, "price": 1.9, "research": 0.0, "contest_pen": 1.5, "k_wage_h": 2.0, "max_stores": 11}, 2, None),    "kv-Z1": ("softhigh", {"wage_stores": 0, "k_wage_h": 2.0, "contest_pen": 0.3}, 2, None),
     "kv-Z2": ("softhigh", {"wage_stores": 0, "k_wage_h": 2.0, "contest_pen": 0.2}, 2, None),
     "kv-Z3": ("owner", {"wage_stores": 0, "k_wage_h": 2.0, "contest_pen": 0.3}, 2, None),
     # plan B retreat: cut spend AND stop expanding while cash is low and the last tick lost money
@@ -330,6 +340,8 @@ if __name__ == "__main__":
     e.add_argument("--out", default="runs/v8/eval.json")
     a = ap.parse_args()
     cmd_eval(a)
+
+
 
 
 
