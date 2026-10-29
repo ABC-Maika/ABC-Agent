@@ -33,19 +33,29 @@ AFFLUENT = [r for r in range(1, N_REGIONS) if (r - 1) % 4 == 1]
 
 
 class ExpertV8(Expert):
-    def __init__(self, params: dict[str, float], mode: str, frugal_ticks: int = 0, frugal_mkt: float | None = None) -> None:
+    def __init__(self, params: dict[str, float], mode: str, frugal_ticks: int = 0, frugal_mkt: float | None = None, guard: dict[str, float] | None = None) -> None:
         super().__init__(params)
         self.mode = mode  # "lowest" | "ring" | "ring_smart"
         self.frugal_ticks = frugal_ticks  # opening rounds with no research/wage (and optionally less marketing) to clear the 5,000 cash gate
         self.frugal_mkt = frugal_mkt
+        # cash guard: when cash is low AND last tick lost money, cut discretionary spend (a memoryless rule: it reads last_profit)
+        self.guard = guard or {}
 
     def __call__(self, obs: np.ndarray) -> np.ndarray:
-        if self.tick >= self.frugal_ticks:
+        over: dict[str, float] = {}
+        if self.tick < self.frugal_ticks:
+            over.update(research=0.0, wage_spend=0.0, k_wage_h=0.0, k_wage=0.0)
+            if self.frugal_mkt is not None:
+                over.update(marketing=self.frugal_mkt)
+        g = self.guard
+        if g and self.tick >= 10 and obs[self.idx["cash"]] < g["cash"] and obs[self.idx["last_profit"]] < g.get("profit", 0.0):
+            over.update(marketing=g["mkt"], assortment=g["assort"], research=0.0)
+            if "service" in g:
+                over.update(service=g["service"])
+        if not over:
             return super().__call__(obs)
         saved = dict(self.p)
-        self.p.update(research=0.0, wage_spend=0.0, k_wage_h=0.0, k_wage=0.0)
-        if self.frugal_mkt is not None:
-            self.p.update(marketing=self.frugal_mkt)
+        self.p.update(over)
         try:
             return super().__call__(obs)
         finally:
@@ -89,13 +99,18 @@ VARIANTS = {  # name -> (mode, param overrides, frugal opening ticks, frugal ope
     "kv-G": ("lowest", {"wage_stores": 0, "contest_pen": 0.5}, 2, None),
     "kv-H": ("lowest", {"wage_stores": 0, "contest_pen": 1.5}, 2, None),
     "kv-J": ("lowest", {"wage_stores": 0, "contest_pen": 3.0}, 2, None),
+    "kv-H": ("lowest", {"wage_stores": 0, "contest_pen": 1.5}, 2, None),
+    # kv-H + cash guard (cut marketing/assortment/research while cash is low and last tick lost money)
+    "kv-K": ("lowest", {"wage_stores": 0, "contest_pen": 1.5}, 2, None, {"cash": 8000.0, "mkt": 0.5, "assort": 0.6}),
+    "kv-L": ("lowest", {"wage_stores": 0, "contest_pen": 1.5}, 2, None, {"cash": 8000.0, "mkt": 0.2, "assort": 0.3}),
+    "kv-M": ("lowest", {"wage_stores": 0, "contest_pen": 1.5}, 2, None, {"cash": 15000.0, "mkt": 0.5, "assort": 0.6}),
 }
 
 
 def make_expert(variant: str) -> ExpertV8:
-    mode, over, ft, fm = VARIANTS[variant]
+    mode, over, ft, fm, *rest = VARIANTS[variant]
     params = {**json.loads(V6.read_text()), **over}
-    return ExpertV8(params, mode, ft, fm)
+    return ExpertV8(params, mode, ft, fm, rest[0] if rest else None)
 
 
 def register(variants: tuple[str, ...]) -> None:
@@ -130,6 +145,18 @@ FIELD = {  # the original checkpoints, untouched
     "Jack": "agents/misho/jack/checkpoint.zip",
     "Jacky-T-v1.1": "runs/train300k/jacky_v11.zip",
 }
+
+
+import os  # noqa: E402
+
+if os.environ.get("KV8_FIELD") == "orchos":  # the harsh field: two strong Orchos (v5 and v4) squeeze the shared regions
+    FIELD = {
+        "Orcho-v5": "agents/orcho/market-share/checkpoint.zip",
+        "Orcho-v4": "runs/v8/orcho_v4.zip",
+        "Yavkata-sac": "agents/Yavkata/sac/checkpoint.zip",
+        "Jack": "agents/misho/jack/checkpoint.zip",
+        "Jacky-T-v1.1": "runs/train300k/jacky_v11.zip",
+    }
 
 
 def play(job: tuple[str, int, int]) -> dict[str, Any]:
