@@ -1,17 +1,47 @@
 {
   "hunter-1": {
-    "price": 1.52,
+    "price": 1.7,
     "marketing": 1.0,
     "assortment": 1.0,
     "promotion": 1.0,
     "service": 1.0,
-    "research": 0.15,
-    "wage": 0.48,
+    "research": 0.2,
+    "wage": 0.45,
     "smart_pay": 1,
     "cap": 12,
-    "order": "demand"
+    "order": "blocker",
+    "early_price": 0.0,
+    "switch_tick": 0
   },
   "hunter-2": {
+    "price": 2.0,
+    "marketing": 1.0,
+    "assortment": 1.0,
+    "promotion": 1.0,
+    "service": 1.0,
+    "research": 0.2,
+    "wage": 0.45,
+    "smart_pay": 1,
+    "cap": 12,
+    "order": "mirror",
+    "early_price": 0.0,
+    "switch_tick": 0
+  },
+  "hunter-3": {
+    "price": 1.9,
+    "marketing": 1.0,
+    "assortment": 1.0,
+    "promotion": 1.0,
+    "service": 1.0,
+    "research": 0.2,
+    "wage": 0.45,
+    "smart_pay": 1,
+    "cap": 8,
+    "order": "ring",
+    "early_price": 0.0,
+    "switch_tick": 0
+  },
+  "hunter-4": {
     "price": 1.5,
     "marketing": 1.0,
     "assortment": 1.0,
@@ -21,30 +51,8 @@
     "wage": 0.45,
     "smart_pay": 1,
     "cap": 12,
-    "order": "steal"
-  },
-  "hunter-3": {
-    "price": 1.54,
-    "marketing": 1.0,
-    "assortment": 1.0,
-    "promotion": 1.0,
-    "service": 1.0,
-    "research": 0.12,
-    "wage": 0.45,
-    "smart_pay": 1,
-    "cap": 11,
-    "order": "steal"
-  },
-  "hunter-4": {
-    "price": 2.0,
-    "marketing": 1.0,
-    "assortment": 1.0,
-    "promotion": 1.0,
-    "service": 1.0,
-    "research": 0.2,
-    "wage": 0.45,
-    "smart_pay": 1,
-    "cap": 8,
-    "order": "ring"
+    "order": "steal",
+    "early_price": 0.0,
+    "switch_tick": 0
   }
 }

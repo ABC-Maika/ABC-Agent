@@ -19,14 +19,15 @@ from typing import Any
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
-US = "agents/orcho/market-share/checkpoint.zip"
+US = "agents/orcho/market-share/checkpoint.zip"  # overridden by --us
+SHIFTS = (0, 3, 5)
 FIXED = {
-    "krischo": "agents/Krischo/rppo-lstm/checkpoint.zip",
-    "yavkata": "agents/Yavkata/recurrent-ppo/checkpoint.zip",
+    "krischo": "agents/Krischo/mlp-v6/checkpoint.zip",
+    "twin": "agents/Krischo/rppo-lstm/checkpoint.zip",
 }
 SPACE = {
     "price": (0.9, 2.0), "marketing": (0.4, 1.0), "assortment": (0.4, 1.0), "promotion": (0.0, 1.0),
-    "service": (0.4, 1.0), "research": (0.0, 0.5), "wage": (0.3, 0.7),
+    "service": (0.4, 1.0), "research": (0.0, 0.5), "wage": (0.3, 0.7), "early_price": (0.0, 1.5),
 }
 
 
@@ -34,6 +35,7 @@ def random_candidate(rng: random.Random) -> dict[str, Any]:
     from hunter_bots import DEFAULT, ORDERS
 
     p = {k: round(rng.uniform(*r), 2) for k, r in SPACE.items()}
+    p["switch_tick"] = rng.choice([0, 0, 50, 100, 200])
     return {**DEFAULT, **p, "smart_pay": rng.choice([0, 1, 1]), "cap": rng.randint(5, 18), "order": rng.choice(ORDERS)}
 
 
@@ -42,6 +44,8 @@ def mutate(rng: random.Random, parent: dict[str, Any]) -> dict[str, Any]:
 
     q = dict(parent)
     for k, (lo, hi) in SPACE.items():
+        if k == "early_price" and q.get("early_price", 0) == 0:
+            continue
         if rng.random() < 0.5:
             q[k] = round(min(hi, max(lo, q[k] + rng.gauss(0, 0.12 * (hi - lo)))), 2)
     if rng.random() < 0.5:
@@ -51,13 +55,13 @@ def mutate(rng: random.Random, parent: dict[str, Any]) -> dict[str, Any]:
     return q
 
 
-def play(job: tuple[dict[str, Any], int]) -> tuple[float, float, int]:
+def play(job: tuple[dict[str, Any], int, str]) -> tuple[float, float, int]:
     import os
     import sys
 
     os.chdir(ROOT)
     sys.path.insert(0, str(ROOT / "scripts"))
-    params, shift = job
+    params, shift, us_zip = job
     from aggressive_npcs import register
     from hunter_bots import persona_predict
     from retail_simulator.envs import arena_match
@@ -68,7 +72,7 @@ def play(job: tuple[dict[str, Any], int]) -> tuple[float, float, int]:
     base = arena_match.geo_archetypes
     arena_match.geo_archetypes = lambda n, t: {**base(n, t), "cand": persona_predict(params, n)}
     arena_match.GEO_ARCHETYPE_LABELS = (*arena_match.GEO_ARCHETYPE_LABELS, "cand")
-    seats = [ArenaSeatSpec(name="cand", kind="npc", archetype="cand"), ArenaSeatSpec(name="us", kind="rl", checkpoint=US)]
+    seats = [ArenaSeatSpec(name="cand", kind="npc", archetype="cand"), ArenaSeatSpec(name="us", kind="rl", checkpoint=us_zip)]
     seats += [ArenaSeatSpec(name=n, kind="rl", checkpoint=p) for n, p in FIXED.items()]
     seats += [ArenaSeatSpec(name=n, kind="npc", archetype=n) for n in ("cherry-picker+", "fast-follower+")]
     cfg, _, _ = resolve_arena_world(balanced=True)
@@ -90,6 +94,8 @@ def main() -> None:
     parser.add_argument("--n-random", type=int, default=30)
     parser.add_argument("--keep", type=int, default=4)
     parser.add_argument("--workers", type=int, default=6)
+    parser.add_argument("--us", default=US, help="the checkpoint the hunters are searched against")
+    parser.add_argument("--out", type=Path, default=HUNTERS_FILE)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--evolve", type=int, default=0, help="mutations per parent of the current hunters.json (round 2)")
     args = parser.parse_args()
@@ -100,13 +106,13 @@ def main() -> None:
 
         parents = list(load_hunters().items())[:3]
         cands = list(parents) + [(f"{n}-m{j}", mutate(rng, p)) for n, p in parents for j in range(args.evolve)]
-    jobs = [(p, s) for _, p in cands for s in (0, 3)]
+    jobs = [(p, s, args.us) for _, p in cands for s in SHIFTS]
     with Pool(args.workers) as pool:
         res = pool.map(play, jobs, chunksize=1)
     rows = []
     for i, (name, p) in enumerate(cands):
-        a, b = res[2 * i], res[2 * i + 1]
-        rows.append((np.mean([a[0] - a[1], b[0] - b[1]]), np.mean([a[0], b[0]]), np.mean([a[1], b[1]]), np.mean([a[2], b[2]]), name, p))
+        r = res[len(SHIFTS) * i : len(SHIFTS) * (i + 1)]
+        rows.append((np.mean([x[0] - x[1] for x in r]), np.mean([x[0] for x in r]), np.mean([x[1] for x in r]), np.mean([x[2] for x in r]), name, p))
     rows.sort(key=lambda r: -r[0])
     print(f"{'candidate':14}{'order':10}{'price':>6}{'cap':>4}{'bot':>11}{'us':>11}{'gap':>11}{'our rank':>9}")
     for gap, bot, us, rk, name, p in rows:
@@ -120,8 +126,8 @@ def main() -> None:
         kept[f"hunter-{len(kept) + 1}"] = p
         if len(kept) == args.keep:
             break
-    HUNTERS_FILE.write_text(json.dumps(kept, indent=2) + "\n")
-    print(f"\nwrote {HUNTERS_FILE.name}: {list(kept)}")
+    args.out.write_text(json.dumps(kept, indent=2) + "\n")
+    print(f"\nwrote {args.out.name}: {list(kept)}")
 
 
 if __name__ == "__main__":

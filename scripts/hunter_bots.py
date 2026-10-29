@@ -20,10 +20,10 @@ from typing import Any
 from retail_simulator.envs import geo_archetypes as geo
 
 HUNTERS_FILE = Path(__file__).with_name("hunters.json")
-ORDERS = ("index", "demand", "ring", "steal", "quiet", "affluent")
+ORDERS = ("index", "demand", "ring", "steal", "quiet", "affluent", "mirror", "blocker", "calm", "calm2", "hyb1", "hyb3")
 DEFAULT = {
     "price": 2.0, "marketing": 1.0, "assortment": 1.0, "promotion": 1.0, "service": 1.0, "research": 0.2,
-    "wage": 0.45, "smart_pay": 1, "cap": 12, "order": "demand",
+    "wage": 0.45, "smart_pay": 1, "cap": 12, "order": "demand", "early_price": 0.0, "switch_tick": 0,
 }
 # Hand-made personas from the organizer's reward-design hints, as starting points for the search.
 PERSONAS = {
@@ -32,6 +32,9 @@ PERSONAS = {
     "price-fighter": {**DEFAULT, "price": 1.0, "promotion": 1.0, "order": "demand"},
     "cautious": {**DEFAULT, "cap": 6, "order": "quiet", "marketing": 0.5, "promotion": 0.3},
     "spoiler": {**DEFAULT, "order": "steal", "price": 1.5},
+    "mirror": {**DEFAULT, "order": "mirror"},
+    "blocker": {**DEFAULT, "order": "blocker", "price": 1.7},
+    "starver": {**DEFAULT, "order": "mirror", "early_price": 0.9, "switch_tick": 100},
 }
 
 
@@ -79,17 +82,43 @@ def persona_predict(params: dict[str, Any], n_regions: int = 25) -> Callable[...
             return min(empty, key=lambda r: (-rivals(r), cls(r), r))
         if p["order"] == "quiet":
             return min(empty, key=lambda r: (rivals(r), cls(r), r))
+        if p["order"] == "mirror":  # our own v5 opening: METRO then AFFLUENT, highest number first
+            pool = [r for r in empty if cls(r) in (0, 1)] or empty
+            return min(pool, key=lambda r: (cls(r), -r))
+        if p["order"] in ("hyb1", "hyb3"):  # v5 order unless rivals already sit there
+            pool = [r for r in empty if cls(r) in (0, 1)] or empty
+            v5 = sorted(pool, key=lambda r: (cls(r), -r))
+            thr = p.get("thr", 1)  # tolerate fewer than ``thr`` rival stores in a region
+            free = [r for r in v5 if rivals(r) < thr] if p["order"] == "hyb3" else ([v5[0]] if rivals(v5[0]) < thr else [])
+            if free:
+                return free[0]
+            return min(pool, key=lambda r: (rivals(r), cls(r), -r))
+        if p["order"] in ("calm", "calm2"):  # METRO/AFFLUENT only; fewest rivals present, ties highest number
+            pool = [r for r in empty if cls(r) in (0, 1)] or empty
+            if p["order"] == "calm":
+                return min(pool, key=lambda r: (cls(r), rivals(r), -r))
+            return min(pool, key=lambda r: (rivals(r), cls(r), -r))
+        if p["order"] == "blocker":  # METRO, lowest number first but only where we are likely to go: highest first, AFFLUENT before METRO
+            pool = [r for r in empty if cls(r) in (0, 1)] or empty
+            return min(pool, key=lambda r: (-r,))
         if p["order"] == "affluent":
             return min(empty, key=lambda r: ({1: 0, 0: 1, 2: 2, 3: 3}[cls(r)], r))
         return min(empty, key=lambda r: (cls(r), r))  # demand
 
+    tick = [0]
+
     def predict(obs: Any, *, episode_start: bool = False, **_kw: Any) -> Any:
+        if episode_start:
+            tick[0] = 0
+        t = tick[0]
+        tick[0] += 1
+        price = p["early_price"] if (p["early_price"] and t < p["switch_tick"]) else p["price"]
         wage = p["wage"]
         if p["smart_pay"]:
             wage = min(1.0, wage + 4.0 * (1.0 - float(obs[idx["employee_happiness"]])))
         return encode_action(
             geo._structured_action(
-                price=p["price"], marketing=p["marketing"], assortment=p["assortment"],
+                price=price, marketing=p["marketing"], assortment=p["assortment"],
                 promotion=p["promotion"], expansion_choice=target(obs), research=p["research"],
                 service_level=p["service"], automation_tier=0, loyalty_spend=0.0,
                 n_regions=n_regions, wage_spend=wage, warehouse_invest=0.0,
@@ -97,3 +126,20 @@ def persona_predict(params: dict[str, Any], n_regions: int = 25) -> Callable[...
         )
 
     return predict
+
+
+# Candidate fixes for our own agent (v5 opening + a different price), seated as NPCs ``contender-<name>``.
+CONTENDERS = {
+    "v5": {**DEFAULT, "order": "mirror"},
+    "p185": {**DEFAULT, "order": "mirror", "price": 1.85},
+    "p17": {**DEFAULT, "order": "mirror", "price": 1.7},
+    "calm": {**DEFAULT, "order": "calm"},
+    "h1t2": {**DEFAULT, "order": "hyb1", "thr": 2},
+    "h1t3": {**DEFAULT, "order": "hyb1", "thr": 3},
+    "h3t2": {**DEFAULT, "order": "hyb3", "thr": 2},
+    "h3t3": {**DEFAULT, "order": "hyb3", "thr": 3},
+    "h3t4": {**DEFAULT, "order": "hyb3", "thr": 4},
+    "calm2": {**DEFAULT, "order": "calm2"},
+    "p15": {**DEFAULT, "order": "mirror", "price": 1.5},
+    "p17-early": {**DEFAULT, "order": "mirror", "early_price": 1.5, "switch_tick": 150, "price": 1.9},
+}

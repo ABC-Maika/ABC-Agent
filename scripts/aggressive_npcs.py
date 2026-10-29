@@ -17,7 +17,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from hunter_bots import load_hunters, persona_predict
+from hunter_bots import CONTENDERS, load_hunters, persona_predict
 
 from retail_simulator.envs import arena_match
 from retail_simulator.envs import geo_archetypes as geo
@@ -48,6 +48,7 @@ AGGRESSIVE_DESCRIPTIONS.update(
         for name, p in HUNTERS.items()
     }
 )
+AGGRESSIVE_DESCRIPTIONS.update({f"contender-{n}": f"SCRIPTED candidate fix for orcho-a2c: v5 opening, price {p['price']} (early {p['early_price']} until round {p['switch_tick']})." for n, p in CONTENDERS.items()})
 AGGRESSIVE_LABELS: tuple[str, ...] = tuple(AGGRESSIVE_DESCRIPTIONS)
 
 
@@ -195,6 +196,7 @@ def _aggressive_roster(n_regions: int, region_table: Any) -> dict[str, Callable[
             **shared,
         ),
         **{name: persona_predict(p, n_regions) for name, p in HUNTERS.items()},
+        **{f"contender-{n}": persona_predict(p, n_regions) for n, p in CONTENDERS.items()},
     }
 
 
