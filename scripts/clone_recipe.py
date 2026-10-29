@@ -35,11 +35,52 @@ EXPANSION = slice(4, 36)  # the 32 expansion logits in the 44-wide action vector
 CONTINUOUS = [0, 1, 2, 3, 36, 37, 41, 42, 43]
 
 
+RIVALS: list[list[str]] = []  # --rivals: lineups of 5 (zip path or npc:<name>); empty = the NPC field env
+
+
+def collect_rivals(
+    episodes: int, ticks: int, first_seed: int, act: Callable[[np.ndarray], np.ndarray] | None = None
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Like ``collect`` but seat 0 plays real checkpoints (masked like a scored entry), one lineup per
+    episode in turn, homes rotated: the clone learns the situations real entries put it in."""
+    from retail_simulator.envs.arena import arena_home_regions
+    from retail_simulator.envs.arena_match import ArenaMatch, ArenaSeatSpec, resolve_arena_world
+
+    cfg, _, _ = resolve_arena_world(balanced=True)
+    hb = arena_home_regions(6)
+    xs, ys, ts = [], [], []
+    for ep in range(episodes):
+        rivals = RIVALS[(first_seed + ep) % len(RIVALS)]
+        seats = [ArenaSeatSpec(name="me", kind="rl", checkpoint="agents/orcho/v5/checkpoint.zip")]
+        seats += [ArenaSeatSpec(name=f"r{i}", kind="npc", archetype=r[4:]) if r.startswith("npc:")
+                  else ArenaSeatSpec(name=f"r{i}", kind="rl", checkpoint=r) for i, r in enumerate(rivals)]
+        shift = (first_seed + ep) % 6
+        m = ArenaMatch(cfg, seats, seed=first_seed + ep, homes=tuple(hb[(i + shift) % 6] for i in range(6)))
+        expert = _aggressive_roster(25, cfg.demand.regions)[EXPERT]
+        tick = [0]
+
+        def seat0(obs: np.ndarray, *, episode_start: bool = False, **_kw: Any) -> np.ndarray:
+            label = expert(obs, episode_start=episode_start)
+            xs.append(np.asarray(obs, dtype=np.float32))
+            ys.append(label)
+            ts.append(tick[0])
+            tick[0] += 1
+            return label if act is None else act(obs)
+
+        m._policies[0] = seat0  # the recipe labels every state; the learner drives in DAgger rounds
+        for _ in range(ticks):
+            m.step()
+        print(f"  episode {ep}: lineup {(first_seed + ep) % len(RIVALS)}, shift {shift}", flush=True)
+    return np.asarray(xs, dtype=np.float32), np.asarray(ys, dtype=np.float32), np.asarray(ts)
+
+
 def collect(
     episodes: int, ticks: int, first_seed: int, act: Callable[[np.ndarray], np.ndarray] | None = None
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Record observations and the recipe's action for each. ``act`` (the learner) drives the match
     when given (DAgger); otherwise the recipe drives it. Homes and world seeds change every episode."""
+    if RIVALS:
+        return collect_rivals(episodes, ticks, first_seed, act)
     env = NpcFieldEnv(0, episode_ticks=ticks)
     xs, ys, ts = [], [], []
     for ep in range(episodes):
@@ -97,21 +138,29 @@ def main() -> int:
     parser.add_argument("--dagger-rounds", type=int, default=3)
     parser.add_argument("--dagger-episodes", type=int, default=6)
     parser.add_argument("--opening-repeat", type=int, default=1, help="train on the first 150 rounds this many times as often (the opening is where a wrong pick sticks)")
-    parser.add_argument("--see", action="append", default=[], help="extra observation the recipe reads")
+    parser.add_argument("--see", action="append", default=[], help="extra observation the recipe reads (a name, or a prefix ending in * for every region)")
+    parser.add_argument("--scale", action="append", default=[], help="name=value: input scale for an observation (default: its largest value); the policy's tanh saturates above it")
+    parser.add_argument("--rivals", action="append", default=[], help="comma-separated lineup of 5 rivals (zip or npc:<name>); repeat for more lineups; seat 0 then plays these instead of the NPC field")
     parser.add_argument("--out", type=Path, default=Path("runs/mkt/orcho-a2c-clone.zip"))
     args = parser.parse_args()
 
     global EXPERT
     EXPERT = args.expert
+    RIVALS.extend(lineup.split(",") for lineup in args.rivals)
+    assert all(len(lineup) == 5 for lineup in RIVALS), "each --rivals lineup needs exactly 5 seats"
     x, y, t = collect(args.episodes, args.ticks, 0)
     # The recipe reads only the seat's own store counts. Feeding the network anything else lets it
     # lean on features (rival blocks) that look different when the rivals are trained agents.
     names = geo._name_to_index(25)
     relevant = [names["stores"]] + [names[f"stores_region_{r}"] for r in range(1, 25)]
-    relevant += [names[n] for n in args.see]
+    for n in args.see:
+        relevant += [i for k, i in names.items() if k.startswith(n[:-1])] if n.endswith("*") else [names[n]]
     keep = np.zeros(x.shape[1], dtype=np.float32)
     keep[relevant] = 1.0
     scale = np.maximum(np.abs(x).max(axis=0), 1.0).astype(np.float32)
+    for s in args.scale:
+        n, _, v = s.partition("=")
+        scale[names[n]] = float(v)
     venv = DummyVecEnv([lambda: Monitor(NpcFieldEnv(0))])
     model = A2C(
         "MlpPolicy", venv, ent_coef=0.0, verbose=0,
