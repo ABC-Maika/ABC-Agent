@@ -1,4 +1,32 @@
-# jacky-t (v1.1)
+# jacky-t (v1.2)
+
+> **v1.2 is WORSE than v1.1.** It was pushed on request without waiting for the result. v1.1, the
+> better agent, is the checkpoint at commit `89093e8` (`git show 89093e8:agents/misho/jacky-t/checkpoint.zip`).
+> Do not submit v1.2.
+
+## v1.2 (this checkpoint)
+Research lever capped at 0.4 (the cap is the `Box` bound in the saved action space; checked 0.0 to 0.4).
+Recipe: re-clone Orcho + KrischoV8 with the cap (`mimic.py bc ... --research-cap 0.4`), then RL in
+`train_league.py` (via `python runs/run_league.py`, `--subproc` workers): TQC, 5 opponents drawn per
+episode from a pool of 7 (Krischo x2, Yavkata, Orcho, Jack, frozen Jacky-T v1.1, scripted
+cherry-picker), gamma 0.995, 30% of episodes with homes from anywhere, reward weights
+0.7/0.1/0.1/0.1 + 0.25/tick while cumulative profit < 0 + 0.3/tick while first (+0.25 lead bonus),
+critics-only warm-up for 15k steps, actor lr 3e-5. 100k -> 150k with the top-2 penalty (0.25/tick),
+then 10k more steps (to 160k) with that penalty removed. The run was planned to 270k and stopped at
+150k because its 140k snapshot was worse than v1.1.
+
+Tournament (`scripts/arena_rotate.py`, 12 matches: seeds 1001,1002 x 6 home rotations, six seats with
+Jack, Krischo, KrischoV8, Yavkata, Orcho):
+| candidate | mean score | wins | mean rank |
+|---|---|---|---|
+| v1.1 | +134,843 | 0 | 2.67 |
+| v1.2 at 140k (6 matches, seed 1001) | -149,784 | 0 | 5.33 |
+| **v1.2 at 160k (this)** | **-87,404** | **0** | **4.92** |
+Orcho won 10 of the 12 matches in the v1.2 tournament, Krischo 2. RL fine-tuning on top of a behaviour
+clone made it worse again (as in v1.1's rejected fine-tune); likely cause: critics that do not
+match the cloned policy pull the actor away. Next: keep a clone loss in the actor update, or DAgger.
+
+# v1.1 notes (still below)
 
 - **Owner:** misho
 - **Algorithm / policy:** tqc (TQC, MlpPolicy, sb3-contrib)

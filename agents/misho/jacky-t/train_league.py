@@ -26,6 +26,7 @@ import random
 import sys
 from collections.abc import Sequence
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -41,8 +42,10 @@ from sb3_contrib import TQC  # noqa: E402
 from stable_baselines3.common.callbacks import CheckpointCallback  # noqa: E402
 from stable_baselines3.common.monitor import Monitor  # noqa: E402
 from stable_baselines3.common.utils import set_random_seed  # noqa: E402
-from stable_baselines3.common.vec_env import DummyVecEnv  # noqa: E402
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv  # noqa: E402
 
+from gymnasium import spaces  # noqa: E402
+from retail_simulator.core.encoding import flatten_action_space_layout  # noqa: E402
 from retail_simulator.envs.arena import arena_balanced_config, arena_home_regions  # noqa: E402
 from retail_simulator.envs.arena_match import _materialize_predicts  # noqa: E402
 from retail_simulator.envs.geo_archetypes import _name_to_index as geo_name_to_index  # noqa: E402
@@ -58,7 +61,27 @@ OPPONENTS: dict[str, str] = {  # the trained agents on main
     "yavkata": "agents/Yavkata/recurrent-ppo/checkpoint.zip",
     "orcho": "agents/orcho/market-share/checkpoint.zip",
     "jack": "agents/misho/jack/checkpoint.zip",
+    # Hall of fame: a frozen copy of Jacky-T v1.1, so a new candidate cannot win by forgetting it.
+    "jacky-v11": "runs/hof/jacky_v11.zip",
 }
+YARDSTICKS = ("cherry-picker",)  # a scripted archetype that never changes
+EPISODE_OPPONENTS = N_SEATS - 1
+
+
+def capped_action_space(research_cap: float | None) -> spaces.Box:
+    """The bounded-logit training space, with the research lever's upper bound lowered to the cap.
+
+    The bound is stored in the saved zip (a plain ``Box``) and the policy rescales its tanh output
+    into it, so a saved policy can never ask for more research than the cap.
+    """
+    space = jacky.base.bounded_logit_space(build_action_space())
+    if research_cap is None:
+        return space
+    high = space.high.copy()
+    for slot in flatten_action_space_layout().levers:
+        if slot.spec.name == "research":
+            high[slot.offset] = min(float(high[slot.offset]), research_cap)
+    return spaces.Box(low=space.low, high=high, dtype=np.float32)
 
 
 class LeagueEnv(gym.Env):
@@ -75,19 +98,25 @@ class LeagueEnv(gym.Env):
         ticks: int = 1000,
         neg_penalty: float = 0.0,
         pool: Sequence[str] | None = None,
-        any_home: bool = False,
+        any_home: float = 0.0,
         prime_weight: float = 0.0,
+        first_bonus: float = 0.0,
+        research_cap: float | None = None,
     ) -> None:
         super().__init__()
+        # ``first_bonus``: per tick while Jacky-T is first by cumulative profit (after the warm-up).
+        self.first_bonus = first_bonus
         # ``prime_weight``: extra reward per tick for the demand-weighted market share held in the
         # METRO (1, 5, 9, ...) and AFFLUENT (2, 6, 10, ...) regions, the two biggest-demand classes
         # (mean base demand 1,400 and 900, against 600 and 350 for LOYAL and FRONTIER).
         self.prime_weight = prime_weight
-        # ``any_home``: draw the six homes from all enterable regions (1..24), not only the six
-        # published metro homes, so the policy is not tied to one starting geography.
+        # ``any_home``: probability that an episode draws its six homes from all enterable regions
+        # (1..24) instead of the six published metro homes, so the policy is not tied to one
+        # starting geography.
         self.any_home = any_home
-        # ``pool``: the five opponents (OPPONENTS keys or geo archetype names); default: all five.
-        self.pool = list(pool) if pool is not None else list(OPPONENTS)
+        # ``pool``: opponent candidates (OPPONENTS keys or geo archetype names). Five are drawn per
+        # episode, so line-ups vary; the default is every trained agent plus the yardstick.
+        self.pool = list(pool) if pool is not None else [*OPPONENTS, *YARDSTICKS]
         self.neg_penalty = neg_penalty
         self.np_random, _ = seeding.np_random(seed)
         profit, revenue, share, loyalty = weights
@@ -113,7 +142,7 @@ class LeagueEnv(gym.Env):
         self._prime_idx = [obs_index[f"market_share_region_{r}"] for r in prime]
         self._prime_w = demand / demand.sum()
         self.observation_space = build_observation_space(self.config)
-        self.action_space = jacky.base.bounded_logit_space(build_action_space())
+        self.action_space = capped_action_space(research_cap)
         self._predicts: dict[str, Any] = {}
 
     def _predict(self, name: str) -> Any:
@@ -133,14 +162,13 @@ class LeagueEnv(gym.Env):
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None) -> Any:
         super().reset(seed=seed)
         rng = random.Random(int(self.np_random.integers(0, 2**31 - 1)))
-        if self.any_home:
+        if self.any_home and self.np_random.random() < self.any_home:
             n_regions = len(self.config.demand.regions)
             drawn = self.np_random.choice(np.arange(1, n_regions), size=N_SEATS, replace=False)
             homes = tuple(int(h) for h in drawn)
         else:
             homes = tuple(int(h) for h in self.np_random.permutation(self.homes))
-        names = list(self.pool)
-        rng.shuffle(names)
+        names = rng.sample(self.pool, EPISODE_OPPONENTS)
         self.opponents = [self._predict(name) for name in names]
         self.world = RetailParallelEnv(
             self.config,
@@ -179,6 +207,8 @@ class LeagueEnv(gym.Env):
         rivals = np.delete(self.cum, LEARNER)
         rank = int((rivals > mine).sum()) + 1
         shaping = -self.neg_penalty if mine < 0 else 0.0  # losing money overall
+        if rank == 1:
+            shaping += self.first_bonus
         if rank > 2:
             return shaping - self.penalty
         if rank == 1 and mine > 0 and mine - rivals.max() > 0.5 * mine:
@@ -189,35 +219,47 @@ class LeagueEnv(gym.Env):
         return (self._obs[self.agents_[LEARNER]] / self.scale).astype(np.float32)
 
 
+def make_one(seed: int, obs_scale: np.ndarray, args: argparse.Namespace) -> Monitor:
+    """One env copy. A module-level function so worker processes can unpickle it by reference."""
+    return Monitor(
+        LeagueEnv(
+            seed,
+            obs_scale,
+            args.reward_weights,
+            args.bonus,
+            args.penalty,
+            args.rank_warmup,
+            neg_penalty=args.neg_penalty,
+            any_home=args.any_home,
+            prime_weight=args.prime_weight,
+            first_bonus=args.first_bonus,
+            research_cap=args.research_cap,
+        ),
+        info_keywords=("rank",),
+    )
+
+
 def make_env_fns(args: argparse.Namespace, obs_scale: np.ndarray) -> list[Any]:
     seeds = [
         int(s.generate_state(1)[0]) for s in np.random.SeedSequence(args.seed).spawn(args.n_envs)
     ]
-    return [
-        lambda s=s: Monitor(
-            LeagueEnv(
-                s,
-                obs_scale,
-                args.reward_weights,
-                args.bonus,
-                args.penalty,
-                args.rank_warmup,
-                neg_penalty=args.neg_penalty,
-                any_home=args.any_home,
-                prime_weight=args.prime_weight,
-            ),
-            info_keywords=("rank",),
-        )
-        for s in seeds
-    ]
+    return [partial(make_one, s, obs_scale, args) for s in seeds]
 
 
 def train(args: argparse.Namespace) -> TQC:
     set_random_seed(args.seed)
     obs_scale = np.load(args.resume.parent / "obs_scale.npy")
-    venv = DummyVecEnv(make_env_fns(args, obs_scale))
+    env_fns = make_env_fns(args, obs_scale)
+    venv = SubprocVecEnv(env_fns) if args.subproc else DummyVecEnv(env_fns)
     venv.action_space.seed(args.seed)
-    model = TQC.load(args.resume, env=venv)
+    # The saved action space (research cap included) must match the env's, so it is passed in.
+    model = TQC.load(
+        args.resume,
+        env=venv,
+        custom_objects={"action_space": capped_action_space(args.research_cap)},
+    )
+    if args.gamma is not None:
+        model.gamma = args.gamma  # a longer horizon: the default discount looks ~100 rounds ahead
     done = int(model.num_timesteps)
     remaining = args.cap - done
     if remaining <= 0:
@@ -237,6 +279,27 @@ def train(args: argparse.Namespace) -> TQC:
         model._sample_action = lambda ls, action_noise=None, n_envs=1: sample_action(
             0, action_noise, n_envs
         )
+    update_lr = None
+    if args.actor_freeze > 0:
+        # Critic warm-up: for the first ``actor_freeze`` steps only the critics learn (the actor's
+        # learning rate is 0), so they can fit the cloned policy's returns before they steer it.
+        # Afterwards the actor learns at ``actor_lr``.
+        update_lr = model._update_learning_rate
+
+        def gated(optimizers: Any) -> None:
+            update_lr(optimizers)
+            frozen = model.num_timesteps < done + args.actor_freeze
+            for group in model.actor.optimizer.param_groups:
+                group["lr"] = 0.0 if frozen else args.actor_lr
+
+        model._update_learning_rate = gated
+    # The temporary patches above are closures over the model and the worker processes. They must
+    # never be pickled into a snapshot (which would also be custom code inside an entry), so they
+    # are excluded from every ``model.save``.
+    patched = [n for n in ("_sample_action", "_update_learning_rate") if n in model.__dict__]
+    if patched:
+        excluded = model._excluded_save_params
+        model._excluded_save_params = lambda: [*excluded(), *patched, "_excluded_save_params"]
     ckpt_dir = Path("runs") / args.label / "league_ckpt"
     callback = CheckpointCallback(
         save_freq=max(args.checkpoint_freq // args.n_envs, 1),
@@ -248,9 +311,14 @@ def train(args: argparse.Namespace) -> TQC:
     model.learn(total_timesteps=remaining, callback=callback, reset_num_timesteps=False)
     if sample_action is not None:
         del model._sample_action  # the lambda must not be pickled into the saved zip
+    if update_lr is not None:
+        del model._update_learning_rate  # nor the gate
+    if patched:
+        del model._excluded_save_params
+    venv.close()
 
     # Fold the obs scale in, checking the network is unchanged on observations of this env.
-    env = LeagueEnv(args.seed + 1, obs_scale, args.reward_weights, 0.0, 0.0, 0)
+    env = LeagueEnv(args.seed + 1, obs_scale, args.reward_weights, 0.0, 0.0, 0, research_cap=args.research_cap)
     scaled, _ = env.reset()
     samples = [scaled]
     for _ in range(40):
@@ -297,10 +365,19 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--any-home",
-        action="store_true",
-        help="draw the six homes from all 24 enterable regions each episode (default: the six "
-        "published metro homes, shuffled over the seats)",
+        type=float,
+        default=0.0,
+        help="probability that an episode draws its six homes from all 24 enterable regions "
+        "(otherwise the six published metro homes, shuffled over the seats)",
     )
+    parser.add_argument("--first-bonus", type=float, default=0.0, help="per tick while first")
+    parser.add_argument(
+        "--research-cap", type=float, default=None, help="upper bound of the research lever"
+    )
+    parser.add_argument("--gamma", type=float, default=None, help="discount; default: the snapshot's")
+    parser.add_argument("--actor-freeze", type=int, default=0, help="steps with the actor frozen")
+    parser.add_argument("--actor-lr", type=float, default=3e-5, help="actor lr after the freeze")
+    parser.add_argument("--subproc", action="store_true", help="one worker process per env copy")
     parser.add_argument(
         "--reward-weights",
         type=lambda text: tuple(float(part) for part in text.split(",")),

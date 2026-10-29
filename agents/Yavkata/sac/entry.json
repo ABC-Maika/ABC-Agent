@@ -1,0 +1,8 @@
+{
+  "team": "TODO-team-name",
+  "agent_name": "YavkataSAC",
+  "policy_kind": "sac",
+  "contact": "kristian.vakov@encorp.io",
+  "training_recipe": "agents/Yavkata/sac/train_sac_bc.py (warm start only): SAC MlpPolicy, actor behaviour-cloned from the scripted orcho-like policy in the Orcho/Krischo field, critics warmed on the same data, expansion masking, bounded logits, obs scale folded in",
+  "sb3_version": "2.9.2"
+}
