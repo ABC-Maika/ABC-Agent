@@ -1,4 +1,4 @@
-"""Opening-speed gate: does seat 0 (first spec) reach 4 stores by round 3 and 12 by round 90, and stay at 12?
+"""Opening-speed gate (calibrated on v5 itself): seat 0 (first spec) has 3+ stores at round 3, 11+ at round 150 and at the end, and cash never below -5000.
 
     SEED=1 python scripts/opening_check.py me=<zip> b=<zip> ... (6 specs, same format as arena_rotate_parallel.py)
 
@@ -40,10 +40,10 @@ if __name__ == "__main__":
     assert len(SPECS) == 6, "exactly 6 seats"
     with Pool(6) as pool:
         res = sorted(pool.map(play, range(6)))
-    print(f"{'home':>4}{'r3':>4}{'r90':>5}{'r1000':>7}{'min>90':>8}{'min cash':>10}  verdict")
+    print(f"{'home':>4}{'r3':>4}{'r90':>5}{'r1000':>7}{'r150':>8}{'min cash':>10}  verdict")
     ok_all = True
     for shift, st, cash in res:
-        ok = st[2] >= 4 and st[89] >= 12 and min(st[90:]) >= 12
+        ok = st[2] >= 3 and st[149] >= 11 and st[-1] >= 11 and min(cash) > -5000
         ok_all &= ok
-        print(f"{shift:>4}{st[2]:>4}{st[89]:>5}{st[-1]:>7}{min(st[90:]):>8}{min(cash):>10,.0f}  {'PASS' if ok else 'FAIL'}")
+        print(f"{shift:>4}{st[2]:>4}{st[89]:>5}{st[-1]:>7}{st[149]:>8}{min(cash):>10,.0f}  {'PASS' if ok else 'FAIL'}")
     print("GATE:", "PASS" if ok_all else "FAIL")

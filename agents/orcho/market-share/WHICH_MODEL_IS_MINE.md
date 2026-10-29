@@ -82,3 +82,11 @@ cash and got restructured to 3 stores (about -280k). v4's ring order spreads the
 - More than ~14 stores makes staff unhappy and collapses profit; it never goes past 12. Buying
   extra low-value regions when cash is plentiful is untested.
 - Final scoring has no NPCs and uses undisclosed seeds and home rotations.
+
+## Found after publishing v5 (2026-10-29)
+- **v5 vs Krischo mlp-v8, 12 seeds x 6 home rotations (72 games):** v5 ~546k, mlp-v8 ~279k, v5 won 54 of 72 games, never lost money.
+- **Organizer battle (6 rotations):** Krischo 928k, v5 ("ABC") 799k. v5 beat Krischo in 4 of 6 games; two games lost it: home 1 (-212k, 10 stores earning nothing, cash < 0, happiness 1.00 to 0.04, restructured to 3 stores) and home 17 (stuck at 6 stores for 170 rounds, 54k). Both: v5 opens the big METRO regions, which are the rivals' homes, so the demand is split three ways while Krischo opens the empty AFFLUENT regions first.
+- **Hunter bots (`scripts/hunters.json`, round 3):** a bot with v5's opening and price 1.7 beats it (416k vs -111k) when 4 hunters crowd the same regions.
+- **Scripted upgrade (not in this checkpoint):** `orcho-recipe5` = recipe4 + crowd switch (score = demand / (1 + 0.2 x rivals present)) + staff pay 0.40. About +6% and 11/12 wins vs v5's 9/12 in the scripted comparison, but the first network clone of it was 28% worse than v5 (opening copied badly), so it is NOT shipped.
+- **Tests that did not help:** random multi-lever changes (-77% to -124%), marketing 0.95 (-26%), promotion 0.9 (-54%), 11 or 13 stores, aggressive region scoring (k = -0.2: -22%), frugal first 2 rounds (mixed), research 0 (no change).
+- **RL fine-tune (10,000 steps, A2C and PPO):** 2.5% to 6.6% below v5; the first attempt collapsed because the script gave ignored inputs random weights (fixed: zero-start).
