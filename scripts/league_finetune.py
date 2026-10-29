@@ -95,8 +95,11 @@ def random_recipe(rng: random.Random, n_regions: int, idx: dict[str, int]) -> An
 
 
 class LeagueEnv(gym.Env):
-    def __init__(self, seed: int, scale: np.ndarray, ticks: int = 1000) -> None:
+    def __init__(
+        self, seed: int, scale: np.ndarray, ticks: int = 1000, gap_bonus: float = 0.0
+    ) -> None:
         super().__init__()
+        self.gap_bonus = gap_bonus  # extra reward per unit by which we out-earn the strongest rival
         register()  # also needed inside spawned worker processes
         self.np_random, _ = gym.utils.seeding.np_random(seed)
         self.config = arena_balanced_config()
@@ -141,6 +144,7 @@ class LeagueEnv(gym.Env):
         self.agents_ = self.world.possible_agents
         self._obs, _ = self.world.reset(seed=int(self.np_random.integers(0, 2**31 - 1)))
         self.t = 0
+        self.cum = np.zeros(len(self.agents_))
         return (self._obs[self.agents_[0]] / self.scale).astype(np.float32), {}
 
     def step(self, action: np.ndarray) -> Any:
@@ -154,12 +158,18 @@ class LeagueEnv(gym.Env):
         self.t += 1
         me = self.world._state.retailers[0]
         reward = float(rewards[self.agents_[0]]) + HAPPINESS_BONUS * float(me.employee_happiness)
+        if self.gap_bonus:
+            step_r = np.array([float(rewards[a]) for a in self.agents_])
+            self.cum += step_r
+            rival = 1 + int(np.argmax(self.cum[1:]))  # strongest rival so far
+            if self.cum[0] > self.cum[rival]:  # only while we are first
+                reward += self.gap_bonus * (step_r[0] - step_r[rival])
         obs0 = (self._obs[self.agents_[0]] / self.scale).astype(np.float32)
         return obs0, reward, False, self.t >= self.ticks, {}
 
 
-def make_env(seed: int, scale: np.ndarray) -> Monitor:
-    return Monitor(LeagueEnv(seed, scale))
+def make_env(seed: int, scale: np.ndarray, gap_bonus: float = 0.0) -> Monitor:
+    return Monitor(LeagueEnv(seed, scale, gap_bonus=gap_bonus))
 
 
 # Registry defaults of the continuous levers (action index -> default): a neutral starting point.
@@ -176,6 +186,10 @@ def main() -> int:
     parser.add_argument("--n-envs", type=int, default=4)
     parser.add_argument("--scratch", action="store_true", help="no clone: a fresh network, all inputs open")
     parser.add_argument("--subproc", action="store_true", help="one worker process per environment")
+    parser.add_argument(
+        "--gap-bonus", type=float, default=0.0,
+        help="extra reward per unit by which we out-earn the strongest rival, paid only while first",
+    )
     parser.add_argument("--out", type=Path, default=Path("runs/league/orcho-a2c-ft.zip"))
     args = parser.parse_args()
 
@@ -190,7 +204,7 @@ def main() -> int:
 
     env_cls = SubprocVecEnv if args.subproc else DummyVecEnv
     venv = VecNormalize(
-        env_cls([partial(make_env, seed, scale) for seed in range(args.n_envs)]),
+        env_cls([partial(make_env, seed, scale, args.gap_bonus) for seed in range(args.n_envs)]),
         norm_obs=False,
         norm_reward=True,
     )
@@ -237,7 +251,7 @@ def main() -> int:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     model.save(args.out)
     meta = {"algo": "a2c", "reward": "league", "steps": args.steps, "seed": 0, "ent_coef": 0.0,
-            "start": "scratch" if args.scratch else "clone"}
+            "start": "scratch" if args.scratch else "clone", "gap_bonus": args.gap_bonus}
     args.out.with_suffix(".json").write_text(json.dumps(meta) + "\n")
     print(f"saved {args.out}")
     return 0

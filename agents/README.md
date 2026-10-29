@@ -6,7 +6,7 @@ Four teammates, four agents, one comparison. Each agent lives in its own folder 
 
 | Owner | Agent | Checkpoint to add in the playground | Algorithm | Notes |
 |---|---|---|---|---|
-| Orcho | `orcho-a2c` | `agents/orcho/market-share/checkpoint.zip` | A2C `a2c-mlp` | v3: biggest regions first, 12 stores, smart staff pay, imitation-trained; see `agents/orcho/market-share/WHICH_MODEL_IS_MINE.md` |
+| Orcho | `orcho-a2c` | `agents/orcho/market-share/checkpoint.zip` | A2C `a2c-mlp` | v4: ring expansion from own stores, 12 stores, smart staff pay, imitation-trained; see `agents/orcho/market-share/WHICH_MODEL_IS_MINE.md` |
 
 Add a row here when you commit your own checkpoint.
 
