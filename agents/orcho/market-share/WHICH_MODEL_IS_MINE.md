@@ -45,6 +45,22 @@ Version history: v1 (lowest-index regions, 10 stores) 452,422; v2 (biggest regio
 0.45) 1,213,277 but staff collapsed to ~2% happy in the NPC lineup; v3 (smart pay) 1,486,343.
 v4 equals v3 against the teammates and is far better when several copies share a match.
 
+v4 vs 5 copies of v3 on more seeds: seed 2 525,009 (5 / 6 wins), seed 3 611,331 (5 / 6); best v3 copy
+53,757 / 172,820. Reproduce with `scripts/arena_rotate_parallel.py` (`SEED=<n>`) and
+`scripts/arena_copies_repro.py`.
+
+## Tests that did NOT help (so nobody repeats them)
+All against teammates + rivals / teammates + NPCs, 3 home rotations, vs the 12-store recipe:
+| Idea | Result |
+|---|---|
+| Fewer stores (6, 8, 9, 10, 11) | 6 METRO only -30%; each extra AFFLUENT store adds about 50k; 12 is the peak |
+| More stores (14, 16, 24) once cash is plentiful | 14: -11%, 16: -20%, 24: -90% (running cost rises faster than store count) |
+| Third tier (LOYAL) instead of AFFLUENT | -28% to -45% |
+| Price 1.97 (Krischo's) / 1.94 / 1.90 | 1.97 = tie; 1.90 +0.8% / +5.9% but uneven, not adopted |
+| Krischo's warehouse and rival-price follow rules | equal or slightly worse |
+| Cutting marketing/assortment from round 900 ("harvest") | about -10% |
+| Opening only quiet regions / shared-city scoring | much worse vs teammates |
+
 ## Why version 4
 Teammates found that with several copies of our agent in one match the winner depended on the home
 region, not on the agent. Tracing it: v3 opened regions "lowest number first", so every copy rushed
