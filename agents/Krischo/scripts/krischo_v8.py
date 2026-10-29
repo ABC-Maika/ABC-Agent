@@ -1,4 +1,4 @@
-"""Krischo expert v8: the v6 rule expert with Orcho-style ring expansion and wages paid from round 1.
+﻿"""Krischo expert v8: the v6 rule expert with Orcho-style ring expansion and wages paid from round 1.
 
 Why: the v6 expert (a) opens regions lowest-index first, so copies of it crowd regions 1, 5 and 9, and (b) pays no wage
 until 8 stores, which on some seeds spirals into 0 happiness and debt with 3 stores (seed 3: -213k). v8 changes only those.
@@ -52,6 +52,8 @@ class ExpertV8(Expert):
             over.update(marketing=g["mkt"], assortment=g["assort"], research=0.0)
             if "service" in g:
                 over.update(service=g["service"])
+            if g.get("stop_exp"):
+                over.update(cash_buffer=1e9)  # retreat: no new stores while cash is low and the last tick lost money
         if not over:
             return super().__call__(obs)
         saved = dict(self.p)
@@ -64,6 +66,59 @@ class ExpertV8(Expert):
     def _expansion(self, obs: np.ndarray, tick: int) -> int:
         if self.mode == "lowest":
             return super()._expansion(obs, tick)
+        if self.mode in ("softhigh", "owner"):  # soft penalty like S1, but ties go to the HIGHEST region number (Orcho v5 trick); "owner" = Misho's rule first
+            p, idx = self.p, self.idx
+            if tick >= p["harvest_tick"] or obs[idx["stores"]] >= p["max_stores"] or obs[idx["cash"]] < CAPEX + p["cash_buffer"]:
+                return 0
+            pen = p["contest_pen"]
+            free, scored = [], []
+            for r in range(1, N_REGIONS):
+                if self.class_rank[r] < p["max_class"] and obs[idx[f"stores_region_{r}"]] == 0.0:
+                    rv = float(obs[idx[f"others_present_region_{r}"]])
+                    if rv == 0.0:
+                        free.append((-self.base_demand[r], -r))
+                    scored.append((-self.base_demand[r] / (1.0 + pen * rv), -r))
+            if self.mode == "owner" and free:  # the biggest-demand region nobody else holds
+                return -min(free)[1]
+            return -min(scored)[1] if scored else 0
+        if self.mode == "combo":  # soft penalty (demand / (1 + pen * rivals)) among regions with <= thr rivals; if every region is crowded, the least crowded
+            p, idx = self.p, self.idx
+            if tick >= p["harvest_tick"] or obs[idx["stores"]] >= p["max_stores"] or obs[idx["cash"]] < CAPEX + p["cash_buffer"]:
+                return 0
+            thr, pen = p.get("thr", 1), p["contest_pen"]
+            cand = []
+            for r in range(1, N_REGIONS):
+                if self.class_rank[r] < p["max_class"] and obs[idx[f"stores_region_{r}"]] == 0.0:
+                    rv = float(obs[idx[f"others_present_region_{r}"]])
+                    cand.append((rv > thr, -self.base_demand[r] / (1.0 + pen * rv) if rv <= thr else rv, r))
+            return min(cand)[2] if cand else 0
+        if self.mode == "thresh":  # give up crowded regions: among regions with <= thr rivals present take the biggest demand (any class); else the least crowded
+            p, idx = self.p, self.idx
+            if tick >= p["harvest_tick"] or obs[idx["stores"]] >= p["max_stores"] or obs[idx["cash"]] < CAPEX + p["cash_buffer"]:
+                return 0
+            thr = p.get("thr", 1)
+            cand = []
+            for r in range(1, N_REGIONS):
+                if self.class_rank[r] < p["max_class"] and obs[idx[f"stores_region_{r}"]] == 0.0:
+                    rv = float(obs[idx[f"others_present_region_{r}"]])
+                    cand.append(((rv > thr), (rv if rv > thr else 0.0), -self.base_demand[r], r))
+            return min(cand)[3] if cand else 0
+        if self.mode == "high":  # Orcho-v5 style: biggest demand class first, highest region number first (METRO descending, then AFFLUENT)
+            p, idx = self.p, self.idx
+            if tick >= p["harvest_tick"] or obs[idx["stores"]] >= p["max_stores"] or obs[idx["cash"]] < CAPEX + p["cash_buffer"]:
+                return 0
+            cand = [(self.class_rank[r], -r) for r in range(1, N_REGIONS) if self.class_rank[r] < p["max_class"] and obs[idx[f"stores_region_{r}"]] == 0.0]
+            return -min(cand)[1] if cand else 0
+        if self.mode == "steal":  # aggressive: prefer the region (METRO/AFFLUENT) where most rivals already sit, weighted by demand
+            p, idx = self.p, self.idx
+            if tick >= p["harvest_tick"] or obs[idx["stores"]] >= p["max_stores"] or obs[idx["cash"]] < CAPEX + p["cash_buffer"]:
+                return 0
+            scored = [
+                (-self.base_demand[r] * (1.0 + 0.5 * float(obs[idx[f"others_present_region_{r}"]])), r)
+                for r in range(1, N_REGIONS)
+                if self.class_rank[r] < p["max_class"] and obs[idx[f"stores_region_{r}"]] == 0.0
+            ]
+            return min(scored)[1] if scored else 0
         p, idx = self.p, self.idx
         if tick >= p["harvest_tick"] or obs[idx["stores"]] >= p["max_stores"]:
             return 0
@@ -104,6 +159,65 @@ VARIANTS = {  # name -> (mode, param overrides, frugal opening ticks, frugal ope
     "kv-K": ("lowest", {"wage_stores": 0, "contest_pen": 1.5}, 2, None, {"cash": 8000.0, "mkt": 0.5, "assort": 0.6}),
     "kv-L": ("lowest", {"wage_stores": 0, "contest_pen": 1.5}, 2, None, {"cash": 8000.0, "mkt": 0.2, "assort": 0.3}),
     "kv-M": ("lowest", {"wage_stores": 0, "contest_pen": 1.5}, 2, None, {"cash": 15000.0, "mkt": 0.5, "assort": 0.6}),
+    # squeeze-resistance candidates (one change each on top of kv-H): fewer stores, a cash cushion before each new store, gentler wage rise
+    "kv-Q1": ("lowest", {"wage_stores": 0, "contest_pen": 1.5, "max_stores": 10}, 2, None),
+    "kv-Q2": ("lowest", {"wage_stores": 0, "contest_pen": 1.5, "max_stores": 8}, 2, None),
+    "kv-Q3": ("lowest", {"wage_stores": 0, "contest_pen": 1.5, "cash_buffer": 3000.0}, 2, None),
+    "kv-Q4": ("lowest", {"wage_stores": 0, "contest_pen": 1.5, "cash_buffer": 6000.0}, 2, None),
+    "kv-Q5": ("lowest", {"wage_stores": 0, "contest_pen": 1.5, "k_wage_h": 2.0}, 2, None),
+    # wage-rule sweep around kv-Q5 (wage = wage_spend + k_wage_h * (1 - happiness)); Q5 = k_wage_h 2 was the big squeeze-resistance win
+    "kv-R1": ("lowest", {"wage_stores": 0, "contest_pen": 1.5, "k_wage_h": 1.0}, 2, None),
+    "kv-R2": ("lowest", {"wage_stores": 0, "contest_pen": 1.5, "k_wage_h": 0.5}, 2, None),
+    "kv-R3": ("lowest", {"wage_stores": 0, "contest_pen": 1.5, "k_wage_h": 2.0, "wage_spend": 0.5}, 2, None),
+    "kv-R4": ("lowest", {"wage_stores": 0, "contest_pen": 1.5, "k_wage_h": 2.0, "wage_spend": 0.4}, 2, None),
+    "kv-R5": ("lowest", {"wage_stores": 0, "contest_pen": 1.5, "k_wage_h": 3.0}, 2, None),
+    # hyper-aggressive candidates on top of kv-Q5 (the wage-robust expert): undercut price, steal rivals' regions, more stores
+    "kv-G1": ("lowest", {"wage_stores": 0, "contest_pen": 1.5, "k_wage_h": 2.0, "price": 1.7}, 2, None),
+    "kv-G2": ("lowest", {"wage_stores": 0, "contest_pen": 1.5, "k_wage_h": 2.0, "price": 1.5}, 2, None),
+    "kv-G3": ("steal", {"wage_stores": 0, "k_wage_h": 2.0}, 2, None),
+    "kv-G4": ("steal", {"wage_stores": 0, "k_wage_h": 2.0, "price": 1.6}, 2, None),
+    "kv-G5": ("lowest", {"wage_stores": 0, "contest_pen": 1.5, "k_wage_h": 2.0, "max_stores": 14, "max_class": 3}, 2, None),
+    # region-order sweep on top of the Q5 wage rule (k_wage_h 2): the 4-seat battle showed contest_pen 1.5 skips contested METRO for weak AFFLUENT
+    "kv-S0": ("lowest", {"wage_stores": 0, "k_wage_h": 2.0}, 2, None),  # biggest class first, lowest index (no contest penalty)
+    "kv-S1": ("lowest", {"wage_stores": 0, "k_wage_h": 2.0, "contest_pen": 0.3}, 2, None),
+    "kv-S2": ("lowest", {"wage_stores": 0, "k_wage_h": 2.0, "contest_pen": 0.6}, 2, None),
+    "kv-S3": ("high", {"wage_stores": 0, "k_wage_h": 2.0}, 2, None),  # METRO descending then AFFLUENT descending, like Orcho v5
+    "kv-S4": ("ring_smart", {"wage_stores": 0, "k_wage_h": 2.0}, 2, None),
+    # "give up crowded regions" (thr = max rivals tolerated; max_class 3 also allows the lower LOYAL class)
+    "kv-T0": ("thresh", {"wage_stores": 0, "k_wage_h": 2.0, "thr": 0}, 2, None),
+    "kv-T1": ("thresh", {"wage_stores": 0, "k_wage_h": 2.0, "thr": 1}, 2, None),
+    "kv-T2": ("thresh", {"wage_stores": 0, "k_wage_h": 2.0, "thr": 2}, 2, None),
+    "kv-T3": ("thresh", {"wage_stores": 0, "k_wage_h": 2.0, "thr": 1, "max_class": 3}, 2, None),
+    # combined: soft penalty 0.3 (S1) + give up regions with more than thr rivals
+    "kv-U1": ("combo", {"wage_stores": 0, "k_wage_h": 2.0, "contest_pen": 0.3, "thr": 1}, 2, None),
+    "kv-U2": ("combo", {"wage_stores": 0, "k_wage_h": 2.0, "contest_pen": 0.3, "thr": 2}, 2, None),
+    # one-change sweep around kv-S1 (soft penalty 0.3, Q5 wages, frugal 2): expansion, wage base, research, opening
+    "kv-X1": ("lowest", {"wage_stores": 0, "k_wage_h": 2.0, "contest_pen": 0.15}, 2, None),
+    "kv-X2": ("lowest", {"wage_stores": 0, "k_wage_h": 2.0, "contest_pen": 0.2}, 2, None),
+    "kv-X3": ("lowest", {"wage_stores": 0, "k_wage_h": 2.0, "contest_pen": 0.3, "wage_spend": 0.40}, 2, None),
+    "kv-X4": ("lowest", {"wage_stores": 0, "k_wage_h": 2.0, "contest_pen": 0.3, "research": 0.0}, 2, None),
+    "kv-X5": ("lowest", {"wage_stores": 0, "k_wage_h": 2.0, "contest_pen": 0.3, "research": 0.1}, 2, None),
+    "kv-X6": ("lowest", {"wage_stores": 0, "k_wage_h": 2.0, "contest_pen": 0.3, "max_stores": 11}, 2, None),
+    "kv-X7": ("lowest", {"wage_stores": 0, "k_wage_h": 2.0, "contest_pen": 0.3}, 1, None),
+    "kv-X8": ("lowest", {"wage_stores": 0, "k_wage_h": 2.0, "contest_pen": 0.3}, 3, None),
+    # levers measured by Yavkata (COUNTER_STRATEGY.md) on an Orcho-copy probe, now on the S1 base: lower service, wage base 0.55, 8-store cap
+    "kv-Y1": ("lowest", {"wage_stores": 0, "k_wage_h": 2.0, "contest_pen": 0.3, "service": 0.7}, 2, None),
+    "kv-Y2": ("lowest", {"wage_stores": 0, "k_wage_h": 2.0, "contest_pen": 0.3, "service": 0.5}, 2, None),
+    "kv-Y3": ("lowest", {"wage_stores": 0, "k_wage_h": 2.0, "contest_pen": 0.3, "wage_spend": 0.55}, 2, None),
+    "kv-Y4": ("lowest", {"wage_stores": 0, "k_wage_h": 2.0, "contest_pen": 0.3, "max_stores": 8}, 2, None),
+    # hybrid ingredients: highest-number tie-break (Orcho v5), "biggest region nobody holds first" (Misho's owner rule)
+    # hybrid: Q5 base (clonable, pen 1.5) + S1 cheap-wage/research trims; HY2 also takes Orcho's highest-number tie-break
+    "kv-HY1": ("lowest", {"wage_stores": 0, "contest_pen": 1.5, "k_wage_h": 2.0, "wage_spend": 0.40, "research": 0.1}, 2, None),
+    "kv-HY2": ("softhigh", {"wage_stores": 0, "contest_pen": 1.5, "k_wage_h": 2.0, "wage_spend": 0.40, "research": 0.1}, 2, None),    # Misho's joint-check numbers (service 0.2, research 0.1, cap 10, wage 0.45 + 4 x (1 - happiness)) on the Q5 expansion rule
+    "kv-M1": ("lowest", {"wage_stores": 0, "contest_pen": 1.5, "k_wage_h": 4.0, "service": 0.2, "research": 0.1, "max_stores": 10}, 2, None),
+    "kv-M2": ("lowest", {"wage_stores": 0, "contest_pen": 1.5, "k_wage_h": 2.0, "service": 0.2, "research": 0.1, "max_stores": 10}, 2, None),
+    "kv-M3": ("lowest", {"wage_stores": 0, "contest_pen": 1.5, "k_wage_h": 2.0, "service": 0.5}, 2, None),    "kv-M4": ("lowest", {"wage_stores": 0, "contest_pen": 1.5, "k_wage_h": 2.0, "service": 0.2}, 2, None),
+    "kv-M5": ("lowest", {"wage_stores": 0, "contest_pen": 1.5, "k_wage_h": 2.0, "max_stores": 10}, 2, None),    "kv-Z1": ("softhigh", {"wage_stores": 0, "k_wage_h": 2.0, "contest_pen": 0.3}, 2, None),
+    "kv-Z2": ("softhigh", {"wage_stores": 0, "k_wage_h": 2.0, "contest_pen": 0.2}, 2, None),
+    "kv-Z3": ("owner", {"wage_stores": 0, "k_wage_h": 2.0, "contest_pen": 0.3}, 2, None),
+    # plan B retreat: cut spend AND stop expanding while cash is low and the last tick lost money
+    "kv-N": ("lowest", {"wage_stores": 0, "contest_pen": 1.5}, 2, None, {"cash": 8000.0, "mkt": 0.5, "assort": 0.6, "stop_exp": 1}),
+    "kv-O": ("lowest", {"wage_stores": 0, "contest_pen": 1.5}, 2, None, {"cash": 15000.0, "mkt": 0.3, "assort": 0.4, "stop_exp": 1}),
 }
 
 
@@ -216,3 +330,6 @@ if __name__ == "__main__":
     e.add_argument("--out", default="runs/v8/eval.json")
     a = ap.parse_args()
     cmd_eval(a)
+
+
+
