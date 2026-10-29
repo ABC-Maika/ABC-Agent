@@ -1,0 +1,8 @@
+{
+  "team": "TODO-team-name",
+  "agent_name": "YavkataRecurrentPPO",
+  "policy_kind": "recurrent-ppo-lstm",
+  "contact": "kristian.vakov@encorp.io",
+  "training_recipe": "agents/Yavkata/recurrent-ppo/train_recurrent_ppo.py --seed 12 --steps 300000 (RecurrentPPO MlpLstmPolicy vs 4 NPC archetypes, expansion masking, profit reward, obs scale folded in)",
+  "sb3_version": "2.9.2"
+}
