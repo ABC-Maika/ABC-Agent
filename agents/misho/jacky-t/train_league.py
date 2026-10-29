@@ -44,6 +44,9 @@ from stable_baselines3.common.monitor import Monitor  # noqa: E402
 from stable_baselines3.common.utils import set_random_seed  # noqa: E402
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv  # noqa: E402
 
+from aggressive_npcs import register as register_personas  # noqa: E402
+from anchored_tqc import AnchoredTQC, load_demos  # noqa: E402
+from retail_simulator.envs import arena_match  # noqa: E402
 from gymnasium import spaces  # noqa: E402
 from retail_simulator.core.encoding import flatten_action_space_layout  # noqa: E402
 from retail_simulator.envs.arena import arena_balanced_config, arena_home_regions  # noqa: E402
@@ -61,10 +64,14 @@ OPPONENTS: dict[str, str] = {  # the trained agents on main
     "yavkata": "agents/Yavkata/recurrent-ppo/checkpoint.zip",
     "orcho": "agents/orcho/market-share/checkpoint.zip",
     "jack": "agents/misho/jack/checkpoint.zip",
+    "kmlp6": "agents/Krischo/mlp-v6/checkpoint.zip",
+    "yav-sac": "agents/Yavkata/sac/checkpoint.zip",
     # Hall of fame: a frozen copy of Jacky-T v1.1, so a new candidate cannot win by forgetting it.
     "jacky-v11": "runs/hof/jacky_v11.zip",
 }
 YARDSTICKS = ("cherry-picker",)  # a scripted archetype that never changes
+# The teammates' scripted sparring partners (scripts/aggressive_npcs.py): distinct, strong styles.
+PERSONAS = ("cherry-picker+", "fast-follower+", "sprawler+", "orcho-recipe2")
 EPISODE_OPPONENTS = N_SEATS - 1
 
 
@@ -102,8 +109,24 @@ class LeagueEnv(gym.Env):
         prime_weight: float = 0.0,
         first_bonus: float = 0.0,
         research_cap: float | None = None,
+        raw_profit_scale: float | None = None,
+        lead_shaping: float = 0.0,
+        shaping_fade_episodes: int = 0,
+        shaping_gamma: float = 0.99,
     ) -> None:
         super().__init__()
+        register_personas()  # the teammates' scripted personas (cherry-picker+, orcho-recipe2, ...)
+        # ``raw_profit_scale``: train on raw post-penalty profit x this factor. The weighted mode
+        # z-scores every component against the seat's own running mean in the episode, so steady
+        # high profit earns ~0 there; raw profit pays for the level that scoring ranks on.
+        self.raw_profit_scale = raw_profit_scale
+        # ``lead_shaping``: potential-based shaping on the lead over the best rival,
+        # F = k * (gamma * lead' - lead) * scale. Summed over a match it pays the final margin over
+        # the best rival (the "finish first" goal) without changing which policy is optimal. It
+        # fades linearly to 0 over ``shaping_fade_episodes`` episodes of this env copy.
+        self.lead_shaping, self.shaping_fade = lead_shaping, shaping_fade_episodes
+        self.shaping_gamma = shaping_gamma
+        self.episodes = -1
         # ``first_bonus``: per tick while Jacky-T is first by cumulative profit (after the warm-up).
         self.first_bonus = first_bonus
         # ``prime_weight``: extra reward per tick for the demand-weighted market share held in the
@@ -116,22 +139,25 @@ class LeagueEnv(gym.Env):
         self.any_home = any_home
         # ``pool``: opponent candidates (OPPONENTS keys or geo archetype names). Five are drawn per
         # episode, so line-ups vary; the default is every trained agent plus the yardstick.
-        self.pool = list(pool) if pool is not None else [*OPPONENTS, *YARDSTICKS]
+        self.pool = list(pool) if pool is not None else [*OPPONENTS, *YARDSTICKS, *PERSONAS]
         self.neg_penalty = neg_penalty
         self.np_random, _ = seeding.np_random(seed)
         profit, revenue, share, loyalty = weights
         base_config = arena_balanced_config()
-        self.config = replace(
-            base_config,
-            reward=replace(
-                base_config.reward,
-                mode="weighted",
-                weight_profit=profit,
-                weight_revenue=revenue,
-                weight_market_share=share,
-                weight_loyalty=loyalty,
-            ),
-        )
+        if raw_profit_scale is not None:
+            self.config = replace(base_config, reward=replace(base_config.reward, mode="profit"))
+        else:
+            self.config = replace(
+                base_config,
+                reward=replace(
+                    base_config.reward,
+                    mode="weighted",
+                    weight_profit=profit,
+                    weight_revenue=revenue,
+                    weight_market_share=share,
+                    weight_loyalty=loyalty,
+                ),
+            )
         self.scale = obs_scale.astype(np.float32)
         self.bonus, self.penalty, self.rank_warmup, self.ticks = bonus, penalty, rank_warmup, ticks
         self.homes = arena_home_regions(N_SEATS)
@@ -147,7 +173,10 @@ class LeagueEnv(gym.Env):
 
     def _predict(self, name: str) -> Any:
         if name not in OPPONENTS:  # a scripted archetype: a fresh closure, it carries a tick counter
-            roster = geo_archetypes(len(self.config.demand.regions), self.config.demand.regions)
+            # ``arena_match.geo_archetypes`` includes the personas once ``register_personas`` ran.
+            roster = arena_match.geo_archetypes(
+                len(self.config.demand.regions), self.config.demand.regions
+            )
             return roster[name]
         if name not in self._predicts:
             self._predicts.update(
@@ -181,6 +210,8 @@ class LeagueEnv(gym.Env):
         self._obs, _ = self.world.reset(seed=int(self.np_random.integers(0, 2**31 - 1)))
         self.cum = np.zeros(N_SEATS)
         self.t = 0
+        self.episodes += 1
+        self._lead_phi = 0.0
         return self._learner_obs(), {"homes": homes, "opponents": names}
 
     def step(self, action: np.ndarray) -> Any:
@@ -193,7 +224,10 @@ class LeagueEnv(gym.Env):
         self._obs, rewards, _, _, infos = self.world.step(acts)
         self.t += 1
         self.cum += [infos[a]["components"]["profit"] for a in self.agents_]
-        reward = float(rewards[self.agents_[LEARNER]]) + self._rank_shaping()
+        reward = float(rewards[self.agents_[LEARNER]])
+        if self.raw_profit_scale is not None:
+            reward *= self.raw_profit_scale  # profit mode: the world returns raw profit
+        reward += self._rank_shaping() + self._lead_shaping()
         if self.prime_weight:
             shares = np.asarray(self._obs[self.agents_[LEARNER]])[self._prime_idx]
             reward += self.prime_weight * float(shares @ self._prime_w)
@@ -215,6 +249,18 @@ class LeagueEnv(gym.Env):
             return shaping + self.bonus
         return shaping
 
+    def _lead_shaping(self) -> float:
+        if not self.lead_shaping:
+            return 0.0
+        fade = 1.0
+        if self.shaping_fade:
+            fade = max(0.0, 1.0 - self.episodes / self.shaping_fade)
+        scale = self.raw_profit_scale or 1e-3
+        phi = (self.cum[LEARNER] - np.delete(self.cum, LEARNER).max()) * scale
+        shaped = self.lead_shaping * fade * (self.shaping_gamma * phi - self._lead_phi)
+        self._lead_phi = phi
+        return float(shaped)
+
     def _learner_obs(self) -> np.ndarray:
         return (self._obs[self.agents_[LEARNER]] / self.scale).astype(np.float32)
 
@@ -234,6 +280,10 @@ def make_one(seed: int, obs_scale: np.ndarray, args: argparse.Namespace) -> Moni
             prime_weight=args.prime_weight,
             first_bonus=args.first_bonus,
             research_cap=args.research_cap,
+            raw_profit_scale=args.raw_profit_scale,
+            lead_shaping=args.lead_shaping,
+            shaping_fade_episodes=args.shaping_fade_episodes,
+            shaping_gamma=args.gamma or 0.99,
         ),
         info_keywords=("rank",),
     )
@@ -253,11 +303,16 @@ def train(args: argparse.Namespace) -> TQC:
     venv = SubprocVecEnv(env_fns) if args.subproc else DummyVecEnv(env_fns)
     venv.action_space.seed(args.seed)
     # The saved action space (research cap included) must match the env's, so it is passed in.
-    model = TQC.load(
+    learner = AnchoredTQC if args.anchor_data else TQC
+    model = learner.load(
         args.resume,
         env=venv,
         custom_objects={"action_space": capped_action_space(args.research_cap)},
     )
+    if args.anchor_data:
+        demo_obs, demo_act = load_demos(args.anchor_data, args.anchor_max_rank, args.anchor_wage_floor)
+        model.set_demos(demo_obs, demo_act, args.anchor_alpha)
+        print(f"anchoring the actor to {len(demo_obs)} teacher samples (alpha {args.anchor_alpha})")
     if args.gamma is not None:
         model.gamma = args.gamma  # a longer horizon: the default discount looks ~100 rounds ahead
     done = int(model.num_timesteps)
@@ -370,7 +425,26 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="probability that an episode draws its six homes from all 24 enterable regions "
         "(otherwise the six published metro homes, shuffled over the seats)",
     )
+    parser.add_argument(
+        "--anchor-data",
+        type=Path,
+        nargs="+",
+        help="teacher recordings (mimic.py collect): anchors the actor update to them (TD3+BC)",
+    )
+    parser.add_argument("--anchor-alpha", type=float, default=2.5, help="RL weight vs the anchor")
+    parser.add_argument("--anchor-max-rank", type=int, default=2)
+    parser.add_argument("--anchor-wage-floor", type=float, default=0.5)
     parser.add_argument("--first-bonus", type=float, default=0.0, help="per tick while first")
+    parser.add_argument(
+        "--raw-profit-scale",
+        type=float,
+        default=None,
+        help="train on raw profit x this (e.g. 1e-3) instead of the self-normalized weighted reward",
+    )
+    parser.add_argument("--lead-shaping", type=float, default=0.0, help="potential-based lead term")
+    parser.add_argument(
+        "--shaping-fade-episodes", type=int, default=0, help="per env copy; 0 = never fade"
+    )
     parser.add_argument(
         "--research-cap", type=float, default=None, help="upper bound of the research lever"
     )

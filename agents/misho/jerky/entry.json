@@ -1,0 +1,8 @@
+{
+  "team": "TODO-team-name",
+  "agent_name": "Jerky",
+  "policy_kind": "tqc",
+  "contact": "orlinss2008@gmail.com",
+  "training_recipe": "agents/misho/jacky-t: TQC MlpPolicy 512x512, actor behaviour-cloned from winning Orcho and KMlp6 episodes (mimic.py collect + bc --new-net 512,512, wage floor 0.5), then 100k anchored-TQC steps in train_league.py (raw-profit reward + fading lead shaping, 13-opponent pool with personas, research cap 0.4); obs scale folded into the network, expansion masking",
+  "sb3_version": "2.9.2"
+}
