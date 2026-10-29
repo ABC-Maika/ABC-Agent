@@ -23,6 +23,8 @@ import numpy as np  # noqa: E402
 import train_league as league  # noqa: E402
 from mimic import to_env_action  # noqa: E402
 
+from retail_simulator.core.encoding import flatten_action_space_layout  # noqa: E402
+from retail_simulator.core.world import compute_expansion_mask  # noqa: E402
 from retail_simulator.envs.arena_match import _materialize_predicts  # noqa: E402
 from retail_simulator.envs.spaces import build_action_space  # noqa: E402
 
@@ -40,9 +42,12 @@ def main() -> int:
     parser.add_argument("--shift0", type=int, default=0)
     parser.add_argument("--beta", type=float, default=0.0, help="chance per round the teacher acts")
     parser.add_argument("--scale", type=Path, default=Path("runs/jacky_t/league_ckpt/obs_scale.npy"))
+    parser.add_argument("--rule-labels", action="store_true", help="expansion label from the region score")
+    parser.add_argument("--retaliate", type=float, default=0.5)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     obs_scale = np.load(args.scale)
+    exp_slot = next(sl for sl in flatten_action_space_layout().levers if sl.spec.name == "expansion")
     rng = random.Random(args.seed)
     obs_rows, act_rows, profits = [], [], []
     for episode in range(args.episodes):
@@ -62,6 +67,16 @@ def main() -> int:
         for tick in range(TICKS):
             raw = env._obs[env.agents_[league.LEARNER]]
             label = to_env_action(predicts["teacher"](raw, episode_start=tick == 0))
+            if args.rule_labels:
+                state = env.world._state
+                scores = league.region_scores(env.config, state.retailers, league.LEARNER, args.retaliate)
+                legal = compute_expansion_mask(state, league.LEARNER, env.config)
+                scores = np.where(legal[: len(scores)], scores, -np.inf)
+                scores = np.where(league.may_open(state.retailers[league.LEARNER], scores, tick)[: len(scores)], scores, -np.inf)
+                pick = int(np.argmax(scores)) if np.isfinite(scores.max()) and scores.max() > 0 else 0
+                block = np.full(exp_slot.width, -1.0, dtype=np.float32)
+                block[pick] = 1.0
+                label[exp_slot.offset : exp_slot.offset + exp_slot.width] = block
             if rng.random() < args.beta:
                 action = label
             else:
