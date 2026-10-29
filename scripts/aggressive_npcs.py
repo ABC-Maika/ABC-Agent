@@ -32,6 +32,9 @@ AGGRESSIVE_DESCRIPTIONS = {
     "orcho-recipe2": "SCRIPTED v2 recipe: opens the biggest-demand regions first (METRO, AFFLUENT, "
     "LOYAL, FRONTIER), up to 12 stores; staff pay 0.45, raised up to 1.0 when staff get unhappy; "
     "research 0.2.",
+    "orcho-recipe3": "SCRIPTED v3 recipe: recipe2, but it opens the METRO regions as a ring starting next "
+    "to the ones it already holds (not 'lowest number first'), so copies of it stop piling into the same "
+    "regions at the start.",
 }
 AGGRESSIVE_LABELS: tuple[str, ...] = tuple(AGGRESSIVE_DESCRIPTIONS)
 
@@ -105,6 +108,25 @@ def _aggressive_roster(n_regions: int, region_table: Any) -> dict[str, Callable[
         empty = list(geo._own_empty_regions(obs, idx=idx, candidates=range(1, n_regions)))
         return min(empty, key=lambda r: ((r - 1) % 4, r)) if empty else 0
 
+    ring = sorted(r for r in range(1, n_regions) if (r - 1) % 4 == 0)  # METRO regions, in order
+
+    def ring_then_affluent(obs: Any, _tick: int) -> int:
+        """METRO ring: continue from the end of the chain we hold, so every copy walks to a different
+        neighbour; then AFFLUENT by index. Uses only the store counts (no memory of the home)."""
+        # No cash check on purpose: the cloned network cannot see cash, and the game already masks
+        # purchases we cannot afford (a cash check made identical-looking inputs get opposite labels).
+        if float(obs[idx["stores"]]) >= 12:
+            return 0
+        n = len(ring)
+        owned = {i for i, r in enumerate(ring) if float(obs[idx[f"stores_region_{r}"]]) > 0}
+        if owned and len(owned) < n:
+            tails = [q for q in owned if (q + 1) % n not in owned and (q - 1) % n in owned]
+            tails = tails or [q for q in owned if (q + 1) % n not in owned]
+            return ring[(tails[0] + 1) % n]
+        empty = list(geo._own_empty_regions(obs, idx=idx, candidates=range(1, n_regions)))
+        empty = [r for r in empty if (r - 1) % 4 in (0, 1)]  # METRO, AFFLUENT only
+        return min(empty, key=lambda r: ((r - 1) % 4, r)) if empty else 0
+
     def happiness_pay(obs: Any) -> float:
         """0.45 while staff are happy, up to 1.0 as happiness drops (bigger share = higher wage bar)."""
         return min(1.0, 0.45 + 4.0 * (1.0 - float(obs[idx["employee_happiness"]])))
@@ -132,6 +154,9 @@ def _aggressive_roster(n_regions: int, region_table: Any) -> dict[str, Callable[
             **shared,
         ),
         "orcho-recipe": _recipe_predict(capped_sprawl, n_regions, len(idx)),
+        "orcho-recipe3": _recipe_predict(
+            ring_then_affluent, n_regions, len(idx), wage_spend=happiness_pay, research=0.2
+        ),
         "orcho-recipe2": _recipe_predict(
             biggest_first, n_regions, len(idx), wage_spend=happiness_pay, research=0.2
         ),
