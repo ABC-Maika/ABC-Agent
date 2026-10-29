@@ -1,0 +1,1 @@
+{"algo": "ppo", "reward": "league", "steps": 10000, "seed": 0, "ent_coef": 0.0, "start": "clone", "gap_bonus": 0.0, "warmup": 3000}

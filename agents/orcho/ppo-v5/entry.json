@@ -1,0 +1,8 @@
+{
+  "team": "TODO: team name",
+  "agent_name": "orcho-ppo-v5",
+  "policy_kind": "ppo-mlp",
+  "contact": "TODO: contact",
+  "training_recipe": "scripts/league_finetune.py --algo ppo --steps 10000 --warmup 3000 --lr 3e-5 --std 0.03 --gamma 0.999 --n-steps 64 --gap-bonus 0 (orcho-a2c v5 weights copied into a PPO policy, then 3,000 critic-only steps and 7,000 policy steps against a league of hunter bots, Krischo models and organizer bots)",
+  "sb3_version": "2.9.2"
+}

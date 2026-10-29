@@ -37,6 +37,8 @@ AGGRESSIVE_DESCRIPTIONS = {
     "orcho-recipe3": "SCRIPTED v3 recipe: recipe2, but it opens the METRO regions as a ring starting next "
     "to the ones it already holds (not 'lowest number first'), so copies of it stop piling into the same "
     "regions at the start.",
+    "orcho-recipe5": "SCRIPTED v6 recipe: recipe4 plus the crowd switch (regions scored demand / (1 + 0.2 * rivals present), so a "
+    "METRO region with 3+ rivals loses to an empty AFFLUENT one) and base staff pay 0.40.",
     "orcho-recipe4": "SCRIPTED v4 recipe: recipe3's levers, but it opens METRO then AFFLUENT regions "
     "HIGHEST number first, dodging the crowd of agents that open lowest number first.",
 }
@@ -197,6 +199,7 @@ def _aggressive_roster(n_regions: int, region_table: Any) -> dict[str, Callable[
         ),
         **{name: persona_predict(p, n_regions) for name, p in HUNTERS.items()},
         **{f"contender-{n}": persona_predict(p, n_regions) for n, p in CONTENDERS.items()},
+        "orcho-recipe5": persona_predict(CONTENDERS["w40k02"], n_regions),
     }
 
 
