@@ -51,7 +51,10 @@ def load_demos(
     if wage_floor:
         for slot in flatten_action_space_layout().levers:
             if slot.spec.name == "wage_spend":
-                act[:, slot.offset] = np.maximum(act[:, slot.offset], wage_floor)
+                # Not in rounds 1-5: the teachers pay nothing there so cash stays above the 5,000 store
+                # gate (the demos are whole 1,000-round episodes, so the row index gives the round).
+                late = (np.arange(len(act)) % 1000) >= 5
+                act[late, slot.offset] = np.maximum(act[late, slot.offset], wage_floor)
     if expand_boost > 1:
         for slot in flatten_action_space_layout().levers:
             if slot.spec.name == "expansion":

@@ -111,6 +111,8 @@ class LeagueEnv(gym.Env):
         first_bonus: float = 0.0,
         open_bonus: float = 0.0,
         open_bonus_ticks: int = 200,
+        happy_penalty: float = 0.0,
+        research_pulse: bool = False,
         research_cap: float | None = None,
         raw_profit_scale: float | None = None,
         lead_shaping: float = 0.0,
@@ -134,6 +136,11 @@ class LeagueEnv(gym.Env):
         self.first_bonus = first_bonus
         self.open_bonus = open_bonus
         self.open_bonus_ticks = open_bonus_ticks
+        self.happy_penalty = happy_penalty
+        self.research_pulse = research_pulse
+        self._research_at = next(
+            s.offset for s in flatten_action_space_layout().levers if s.spec.name == "research"
+        )
         self._stores = 1
         # ``prime_weight``: extra reward per tick for the demand-weighted market share held in the
         # METRO (1, 5, 9, ...) and AFFLUENT (2, 6, 10, ...) regions, the two biggest-demand classes
@@ -228,6 +235,11 @@ class LeagueEnv(gym.Env):
             acts[agent] = np.asarray(
                 predict(self._obs[agent], episode_start=self.t == 0), dtype=np.float32
             ).ravel()
+        if self.research_pulse and self.t % 10 == 0:
+            # Training-side rule: every 10th round, while not first by cumulative profit, spend 0.4 on
+            # research (the stored action stays the policy's own, so this nudges play, it is not shipped).
+            if int((np.delete(self.cum, LEARNER) > self.cum[LEARNER]).sum()) > 0:
+                acts[self.agents_[LEARNER]] = self._with_research(acts[self.agents_[LEARNER]])
         self._obs, rewards, _, _, infos = self.world.step(acts)
         self.t += 1
         self.cum += [infos[a]["components"]["profit"] for a in self.agents_]
@@ -241,11 +253,20 @@ class LeagueEnv(gym.Env):
             stores = int(np.sum(self.world._state.retailers[LEARNER].stores_per_region))
             reward += self.open_bonus * max(0, stores - self._stores)
             self._stores = stores
+        if self.happy_penalty:
+            # Unpaid staff (happiness near 0) trigger the write-off penalty; RL drove wages to ~0.02.
+            happy = float(self.world._state.retailers[LEARNER].employee_happiness)
+            reward -= self.happy_penalty * max(0.0, 0.5 - happy)
         if self.prime_weight:
-            shares = np.asarray(self._obs[self.agents_[LEARNER]])[self._prime_idx]
+            shares =np.asarray(self._obs[self.agents_[LEARNER]])[self._prime_idx]
             reward += self.prime_weight * float(shares @ self._prime_w)
         rank = int((self.cum > self.cum[LEARNER]).sum()) + 1
         return self._learner_obs(), reward, False, self.t >= self.ticks, {"rank": rank}
+
+    def _with_research(self, action: np.ndarray) -> np.ndarray:
+        action = np.array(action, dtype=np.float32)
+        action[self._research_at] = 0.4
+        return action
 
     def _rank_shaping(self) -> float:
         if self.t < self.rank_warmup:
@@ -293,6 +314,8 @@ def make_one(seed: int, obs_scale: np.ndarray, args: argparse.Namespace) -> Moni
             prime_weight=args.prime_weight,
             first_bonus=args.first_bonus,
             open_bonus=args.open_bonus,
+            happy_penalty=args.happy_penalty,
+            research_pulse=args.research_pulse,
             research_cap=args.research_cap,
             raw_profit_scale=args.raw_profit_scale,
             lead_shaping=args.lead_shaping,
@@ -453,6 +476,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--anchor-wage-floor", type=float, default=0.5)
     parser.add_argument("--expand-boost", type=int, default=1)
     parser.add_argument("--open-bonus", type=float, default=0.0, help="reward per newly opened region")
+    parser.add_argument("--happy-penalty", type=float, default=0.0)
+    parser.add_argument("--research-pulse", action="store_true")
     parser.add_argument(
         "--pool", nargs="+", default=None, help="opponent names to draw from (default: the full league)"
     )
