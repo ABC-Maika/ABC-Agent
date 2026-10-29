@@ -78,9 +78,16 @@ def collect(args: argparse.Namespace) -> None:
 def behaviour_clone(args: argparse.Namespace) -> None:
     obs = np.concatenate([np.load(p)["obs"] for p in args.data])
     act = np.concatenate([np.load(p)["act"] for p in args.data])
-    model = TQC.load(args.snapshot, device="cpu")
+    # With a research cap the saved action space carries the lower bound, and targets above it are
+    # clipped to it (the scaled target is clipped to [-1, 1]).
+    model = TQC.load(
+        args.snapshot,
+        device="cpu",
+        custom_objects={"action_space": league.capped_action_space(args.research_cap)},
+    )
     policy = model.policy
-    target = torch.as_tensor(policy.scale_action(act), dtype=torch.float32)  # to [-1, 1]
+    scaled_act = np.clip(policy.scale_action(act), -1.0, 1.0)
+    target = torch.as_tensor(scaled_act, dtype=torch.float32)  # to [-1, 1]
     inputs = torch.as_tensor(obs, dtype=torch.float32)
     actor = policy.actor
     params = [*actor.latent_pi.parameters(), *actor.mu.parameters()]
@@ -124,6 +131,7 @@ def main() -> int:
     b.add_argument("data", type=Path, nargs="+")
     b.add_argument("--snapshot", type=Path, default=Path("runs/jacky_t/league_ckpt/jacky_t_league_100000_steps.zip"))
     b.add_argument("--scale", type=Path, default=scale)
+    b.add_argument("--research-cap", type=float, default=None)
     b.add_argument("--epochs", type=int, default=12)
     b.add_argument("--lr", type=float, default=1e-3)
     b.add_argument("--batch-size", type=int, default=256)
