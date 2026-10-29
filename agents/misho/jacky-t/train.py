@@ -36,6 +36,7 @@ import numpy.typing as npt  # noqa: E402
 import torch  # noqa: E402
 import train_vs_npcs as base  # noqa: E402
 from sb3_contrib import TQC  # noqa: E402
+from stable_baselines3.common.callbacks import CheckpointCallback  # noqa: E402
 from stable_baselines3.common.monitor import Monitor  # noqa: E402
 from stable_baselines3.common.utils import set_random_seed  # noqa: E402
 from stable_baselines3.common.vec_env import DummyVecEnv, VecEnv  # noqa: E402
@@ -116,7 +117,21 @@ def train(args: argparse.Namespace) -> TQC:
         seed=args.seed,
         verbose=1,
     )
-    model.learn(total_timesteps=args.steps)
+    # Periodic snapshots keep an interrupted run usable. They are NOT folded (the obs scale is
+    # still outside the network), so the scale is saved beside them; ``--finalize`` folds one.
+    ckpt_dir = Path("runs") / args.label / "ckpt"
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    np.save(ckpt_dir / "obs_scale.npy", obs_scale)
+    callbacks = []
+    if args.checkpoint_freq > 0:
+        callbacks.append(
+            CheckpointCallback(
+                save_freq=max(args.checkpoint_freq // args.n_envs, 1),
+                save_path=str(ckpt_dir),
+                name_prefix="jacky_t",
+            )
+        )
+    model.learn(total_timesteps=args.steps, callback=callbacks)
     before = network_outputs(model, samples / obs_scale)
     fold_obs_scale(model, obs_scale)
     after = network_outputs(model, samples)
@@ -140,6 +155,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--learning-starts", type=int, default=4_000)
     parser.add_argument("--gradient-steps", type=int, default=2)
+    parser.add_argument("--checkpoint-freq", type=int, default=20_000, help="0 disables")
+    parser.add_argument(
+        "--finalize", type=Path, help="fold the obs scale into this periodic snapshot and save --out"
+    )
     parser.add_argument(
         "--reward-weights",
         type=lambda text: tuple(float(part) for part in text.split(",")),
@@ -149,8 +168,20 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def finalize(snapshot: Path, out: Path) -> None:
+    """Fold the obs scale saved beside a periodic snapshot into it and save a scorable zip."""
+    model = TQC.load(snapshot, device="cpu")
+    fold_obs_scale(model, np.load(snapshot.parent / "obs_scale.npy"))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    model.save(out)
+    print(f"folded {snapshot} -> {out}")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.finalize is not None:
+        finalize(args.finalize, args.out)
+        return 0
     model = train(args)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     model.save(args.out)

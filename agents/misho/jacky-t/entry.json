@@ -1,0 +1,8 @@
+{
+  "team": "TODO-team-name",
+  "agent_name": "Jacky-T",
+  "policy_kind": "tqc",
+  "contact": "orlinss2008@gmail.com",
+  "training_recipe": "agents/misho/jacky-t/train.py (80k steps vs the four NPCs) then train_league.py (20k steps vs Krischo, Yavkata, orcho and Jack): TQC MlpPolicy, weighted reward 0.3/0.3/0.3/0.1 plus top-2 rank penalty and lead bonus, expansion masking, obs scale folded into the network",
+  "sb3_version": "2.9.2"
+}
