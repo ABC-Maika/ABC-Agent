@@ -66,6 +66,7 @@ OPPONENTS: dict[str, str] = {  # the trained agents on main
     "jack": "agents/misho/jack/checkpoint.zip",
     "kmlp6": "agents/Krischo/mlp-v6/checkpoint.zip",
     "kmlp8": "agents/Krischo/mlp-v8/checkpoint.zip",
+    "orcho-v5": "agents/orcho/v5/checkpoint.zip",
     "yav-sac": "agents/Yavkata/sac/checkpoint.zip",
     # Hall of fame: a frozen copy of Jacky-T v1.1, so a new candidate cannot win by forgetting it.
     "jacky-v11": "runs/hof/jacky_v11.zip",
@@ -580,6 +581,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     model = train(args)
     args.out.parent.mkdir(parents=True, exist_ok=True)
+    jacky.stock_schedule(model)
     model.save(args.out)
     print(f"saved {args.out}")
     return 0
