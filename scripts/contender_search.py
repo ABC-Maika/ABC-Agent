@@ -33,6 +33,10 @@ LINEUPS_V6 = {  # round 4 (--v6 4): v6's bad start (home 9, shift 2) on a fresh 
     "field9": (41, LINEUPS["field"][1], (2,)),
     "hunters6": (7, ["npc:hunter-5", "npc:hunter-6", "npc:hunter-7", "npc:hunter-8", "agents/orcho/v5/checkpoint.zip"], SHIFTS),
 }
+LINEUPS_V62 = {  # round 5 (--v6 5): the teammates' new agents, all 6 homes (losses depend on the home)
+    "field2": (31, ["agents/orcho/v6/checkpoint.zip", "agents/Krischo/mlp-v10-rl/checkpoint.zip", "agents/Yavkata/sac-v2/checkpoint.zip",
+                    "agents/misho/jerky/checkpoint.zip", "agents/orcho/v5/checkpoint.zip"], tuple(range(6))),
+}
 SPACE = {"price": (1.8, 2.0), "marketing": (0.8, 1.0), "promotion": (0.7, 1.0), "wage": (0.30, 0.50), "k": (-0.3, 1.5)}
 
 
@@ -92,6 +96,28 @@ V6_ROUND4 = {  # v6 lost from home 9: 4 stores in rivals' homes on round 2 with 
     "v6+nodebtcut+hold": {**_V6, "crowd_cash": 0.0, "hold_crowded": 5000.0},
     "v6+nodebtcut+k.5": {**_V6, "crowd_cash": 0.0, "k": 0.5},
 }
+_V61 = {**_V6, "k": 1.0}  # = hunter_bots.CONTENDERS["v6.1"]
+_S = {**_V61, "survive_cash": -2000.0, "survive_exit": 0.0, "survive_mkt": 0.0}
+V6_ROUND5 = {  # in a field of 12-store agents only two profit per game; the rest crash to -250k in debt
+    "v6.1": _V61,
+    "s2k": _S,
+    "s2k+exit2k+m.3": {**_S, "survive_exit": 2000.0, "survive_mkt": 0.3},
+    "s2k+m.5": {**_S, "survive_mkt": 0.5},
+    "s2k+nopay": {**_S, "survive_pay": 0},
+    "s500": {**_S, "survive_cash": -500.0},
+    "s5k": {**_S, "survive_cash": -5000.0},
+    "s8k": {**_S, "survive_cash": -8000.0},
+}
+V6_ROUND6 = {  # round 5: survival made no difference. The real cliff is cash < -5000 (credit limit): the game then
+    # clamps every lever and the wage to 0 and the seat bleeds ~750/round. Keep marketing, stop the cheap leaks early
+    "v6.1": _V61,
+    "s1k+m1": {**_S, "survive_cash": 1000.0, "survive_exit": 3000.0, "survive_mkt": 1.0},
+    "s1k+m1+nopay": {**_S, "survive_cash": 1000.0, "survive_exit": 3000.0, "survive_mkt": 1.0, "survive_pay": 0},
+    "nocrowd": {**_V61, "crowd_price": 0.0},
+    "v6": _V6,
+    "nocrowd+k.5": {**_V61, "crowd_price": 0.0, "k": 0.5},
+    "debtcut": {**_V61, "crowd_cash": 3000.0},
+}
 
 
 def play(job: tuple[dict[str, Any], tuple[Any, ...], int]) -> float:
@@ -130,7 +156,7 @@ def main() -> None:
     sys.path.insert(0, str(ROOT / "scripts"))
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--one-at-a-time", action="store_true", help="single-knob changes from v5 instead of random candidates")
-    parser.add_argument("--v6", nargs="?", const="1", help="the situational v6 ideas instead of random candidates: 1 = V6_IDEAS, 2 = V6_ROUND2, 3 = V6_ROUND3, 4 = V6_ROUND4 (+ LINEUPS_V6)")
+    parser.add_argument("--v6", nargs="?", const="1", help="the situational v6 ideas instead of random candidates: 1 = V6_IDEAS, 2 = V6_ROUND2, 3 = V6_ROUND3, 4 = V6_ROUND4 (+ LINEUPS_V6), 5 = V6_ROUND5 (on LINEUPS_V62 only)")
     parser.add_argument("--n-random", type=int, default=30)
     parser.add_argument("--keep", type=int, default=5)
     parser.add_argument("--workers", type=int, default=6)
@@ -141,10 +167,12 @@ def main() -> None:
     cands = [("v5-recipe", baseline())]
     lineups = dict(LINEUPS)
     if args.v6:
-        rounds = {"1": V6_IDEAS, "2": V6_ROUND2, "3": V6_ROUND3, "4": V6_ROUND4}
+        rounds = {"1": V6_IDEAS, "2": V6_ROUND2, "3": V6_ROUND3, "4": V6_ROUND4, "5": V6_ROUND5, "6": V6_ROUND6}
         cands += [(n, {**baseline(), **d}) for n, d in rounds[args.v6].items()]
         if args.v6 == "4":
             lineups.update(LINEUPS_V6)
+        if args.v6 in ("5", "6"):
+            lineups = dict(LINEUPS_V62)
     elif args.one_at_a_time:
         cands += [(n, {**baseline(), **d}) for n, d in ONE_AT_A_TIME.items()]
     else:

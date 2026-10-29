@@ -33,6 +33,11 @@ DEFAULT = {
     "war_price": 1.6,
     "crowd_cash": -1e18,  # undercut only while cash >= this (0: stop the price war while we are the one in debt)
     "hold_crowded": 0.0,  # while cash < this, open only regions with fewer than 2 rivals (no borrowing into crowds)
+    # v6.2 survival mode: losers of the 12-store race crash to -250k by spending full levers in debt
+    "survive_cash": -1e18,  # enter below this cash: no undercut, no research, marketing/assortment at survive_mkt
+    "survive_exit": 0.0,    # leave once cash is back above this
+    "survive_mkt": 0.0,
+    "survive_pay": 1,       # 0: no smart-pay wage boost while surviving (pay the base wage only)
 }
 # Hand-made personas from the organizer's reward-design hints, as starting points for the search.
 PERSONAS = {
@@ -130,15 +135,33 @@ def persona_predict(params: dict[str, Any], n_regions: int = 25) -> Callable[...
 
     tick = [0]
     war = [False]
+    survive = [False]
 
     def predict(obs: Any, *, episode_start: bool = False, **_kw: Any) -> Any:
         if episode_start:
             tick[0] = 0
             war[0] = False
+            survive[0] = False
         t = tick[0]
         tick[0] += 1
         price = p["early_price"] if (p["early_price"] and t < p["switch_tick"]) else p["price"]
         cash = float(obs[idx["cash"]])
+        if not survive[0] and cash < p["survive_cash"]:
+            survive[0] = True
+        elif survive[0] and cash > p["survive_exit"]:
+            survive[0] = False
+        if survive[0]:
+            wage = p["wage"]
+            if p["smart_pay"] and p["survive_pay"]:
+                wage = min(1.0, wage + 4.0 * (1.0 - float(obs[idx["employee_happiness"]])))
+            return encode_action(
+                geo._structured_action(
+                    price=p["price"], marketing=p["survive_mkt"], assortment=p["survive_mkt"],
+                    promotion=p["promotion"], expansion_choice=0, research=0.0,
+                    service_level=p["service"], automation_tier=0, loyalty_spend=0.0,
+                    n_regions=n_regions, wage_spend=wage, warehouse_invest=0.0,
+                )
+            )
         if p["crowd_price"] and cash >= p["crowd_cash"]:
             own = [r for r in range(1, n_regions) if float(obs[idx[f"stores_region_{r}"]]) > 0]
             crowd = sum(float(obs[idx[f"others_present_region_{r}"]]) for r in own) / max(1, len(own))

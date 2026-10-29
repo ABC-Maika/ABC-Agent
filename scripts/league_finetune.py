@@ -72,6 +72,8 @@ ZIPS = {  # trained opponents in the league zoo
     "krischo-mlp-v9": "agents/Krischo/mlp-v9/checkpoint.zip",  # v6.2: the strongest teammates' agents
     "yavkata-sac": "agents/Yavkata/sac/checkpoint.zip",
     "misho-jerky": "agents/misho/jerky/checkpoint.zip",
+    "krischo-mlp-v10-rl": "agents/Krischo/mlp-v10-rl/checkpoint.zip",
+    "yavkata-sac-v2": "agents/Yavkata/sac-v2/checkpoint.zip",
 }
 
 
