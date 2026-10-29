@@ -17,6 +17,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from hunter_bots import load_hunters, persona_predict
+
 from retail_simulator.envs import arena_match
 from retail_simulator.envs import geo_archetypes as geo
 
@@ -35,7 +37,17 @@ AGGRESSIVE_DESCRIPTIONS = {
     "orcho-recipe3": "SCRIPTED v3 recipe: recipe2, but it opens the METRO regions as a ring starting next "
     "to the ones it already holds (not 'lowest number first'), so copies of it stop piling into the same "
     "regions at the start.",
+    "orcho-recipe4": "SCRIPTED v4 recipe: recipe3's levers, but it opens METRO then AFFLUENT regions "
+    "HIGHEST number first, dodging the crowd of agents that open lowest number first.",
 }
+HUNTERS = load_hunters()  # sparring bots searched to beat our agent (scripts/hunter_search.py)
+AGGRESSIVE_DESCRIPTIONS.update(
+    {
+        name: f"SCRIPTED sparring bot searched to beat orcho-a2c: {p['order']} expansion, price "
+        f"{p['price']}, marketing {p['marketing']}, promotion {p['promotion']}, up to {p['cap']} stores."
+        for name, p in HUNTERS.items()
+    }
+)
 AGGRESSIVE_LABELS: tuple[str, ...] = tuple(AGGRESSIVE_DESCRIPTIONS)
 
 
@@ -127,6 +139,15 @@ def _aggressive_roster(n_regions: int, region_table: Any) -> dict[str, Callable[
         empty = [r for r in empty if (r - 1) % 4 in (0, 1)]  # METRO, AFFLUENT only
         return min(empty, key=lambda r: ((r - 1) % 4, r)) if empty else 0
 
+    def highest_first(obs: Any, _tick: int) -> int:
+        """METRO then AFFLUENT, HIGHEST region number first. Most agents (the twin, Krischo's LSTM, ...)
+        open lowest-number first, so this dodges their crowd in the opening cash race. Stateless."""
+        if float(obs[idx["stores"]]) >= 12:
+            return 0
+        empty = list(geo._own_empty_regions(obs, idx=idx, candidates=range(1, n_regions)))
+        empty = [r for r in empty if (r - 1) % 4 in (0, 1)]  # METRO, AFFLUENT only
+        return min(empty, key=lambda r: ((r - 1) % 4, -r)) if empty else 0
+
     def happiness_pay(obs: Any) -> float:
         """0.45 while staff are happy, up to 1.0 as happiness drops (bigger share = higher wage bar)."""
         return min(1.0, 0.45 + 4.0 * (1.0 - float(obs[idx["employee_happiness"]])))
@@ -154,6 +175,9 @@ def _aggressive_roster(n_regions: int, region_table: Any) -> dict[str, Callable[
             **shared,
         ),
         "orcho-recipe": _recipe_predict(capped_sprawl, n_regions, len(idx)),
+        "orcho-recipe4": _recipe_predict(
+            highest_first, n_regions, len(idx), wage_spend=happiness_pay, research=0.2
+        ),
         "orcho-recipe3": _recipe_predict(
             ring_then_affluent, n_regions, len(idx), wage_spend=happiness_pay, research=0.2
         ),
@@ -170,6 +194,7 @@ def _aggressive_roster(n_regions: int, region_table: Any) -> dict[str, Callable[
             loyalty_spend=0.4,
             **shared,
         ),
+        **{name: persona_predict(p, n_regions) for name, p in HUNTERS.items()},
     }
 
 
