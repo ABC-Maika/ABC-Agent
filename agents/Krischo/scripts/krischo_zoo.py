@@ -107,10 +107,11 @@ class ZipAny:
 
             self.model = RecurrentPPO.load(path, device="cpu")
         except Exception:
-            from stable_baselines3 import A2C, PPO
+            from sb3_contrib import TQC
+            from stable_baselines3 import A2C, DDPG, PPO, SAC, TD3
 
             self.recurrent = False
-            for cls in (PPO, A2C):
+            for cls in (PPO, A2C, TQC, SAC, TD3, DDPG):
                 try:
                     self.model = cls.load(path, device="cpu")
                     break

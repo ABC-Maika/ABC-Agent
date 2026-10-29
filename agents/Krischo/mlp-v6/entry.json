@@ -1,0 +1,8 @@
+{
+  "team": "TODO: team name",
+  "agent_name": "Krischo-mlp-v6",
+  "policy_kind": "ppo-mlp",
+  "contact": "TODO: contact",
+  "training_recipe": "agents/Krischo/scripts/krischo_mlp.py: the memoryless rule expert expert_params_v6.json (12 stores METRO then AFFLUENT, price 2.0, marketing/assortment/promotion 1.0, no wage until 8 stores) behaviour-cloned into a PPO MlpPolicy (256x256 ReLU) and refined with 4 DAgger rounds against league opponents; observation scale folded into the first layer, expansion masking, six-seat matches",
+  "sb3_version": "2.9.2"
+}
