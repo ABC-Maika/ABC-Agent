@@ -109,6 +109,7 @@ class LeagueEnv(gym.Env):
         any_home: float = 0.0,
         prime_weight: float = 0.0,
         first_bonus: float = 0.0,
+        open_bonus: float = 0.0,
         research_cap: float | None = None,
         raw_profit_scale: float | None = None,
         lead_shaping: float = 0.0,
@@ -130,6 +131,8 @@ class LeagueEnv(gym.Env):
         self.episodes = -1
         # ``first_bonus``: per tick while Jacky-T is first by cumulative profit (after the warm-up).
         self.first_bonus = first_bonus
+        self.open_bonus = open_bonus
+        self._stores = 1
         # ``prime_weight``: extra reward per tick for the demand-weighted market share held in the
         # METRO (1, 5, 9, ...) and AFFLUENT (2, 6, 10, ...) regions, the two biggest-demand classes
         # (mean base demand 1,400 and 900, against 600 and 350 for LOYAL and FRONTIER).
@@ -213,6 +216,7 @@ class LeagueEnv(gym.Env):
         self.t = 0
         self.episodes += 1
         self._lead_phi = 0.0
+        self._stores = 1
         return self._learner_obs(), {"homes": homes, "opponents": names}
 
     def step(self, action: np.ndarray) -> Any:
@@ -229,6 +233,12 @@ class LeagueEnv(gym.Env):
         if self.raw_profit_scale is not None:
             reward *= self.raw_profit_scale  # profit mode: the world returns raw profit
         reward += self._rank_shaping() + self._lead_shaping()
+        if self.open_bonus:
+            # Aggression: a one-off reward each time the learner opens a new region (the clone stalls
+            # at 3 stores when a rival contests its regions; the teachers keep expanding to 12).
+            stores = int(np.sum(self.world._state.retailers[LEARNER].stores_per_region))
+            reward += self.open_bonus * max(0, stores - self._stores)
+            self._stores = stores
         if self.prime_weight:
             shares = np.asarray(self._obs[self.agents_[LEARNER]])[self._prime_idx]
             reward += self.prime_weight * float(shares @ self._prime_w)
@@ -280,11 +290,13 @@ def make_one(seed: int, obs_scale: np.ndarray, args: argparse.Namespace) -> Moni
             any_home=args.any_home,
             prime_weight=args.prime_weight,
             first_bonus=args.first_bonus,
+            open_bonus=args.open_bonus,
             research_cap=args.research_cap,
             raw_profit_scale=args.raw_profit_scale,
             lead_shaping=args.lead_shaping,
             shaping_fade_episodes=args.shaping_fade_episodes,
             shaping_gamma=args.gamma or 0.99,
+            pool=args.pool,
         ),
         info_keywords=("rank",),
     )
@@ -438,6 +450,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--anchor-max-rank", type=int, default=2)
     parser.add_argument("--anchor-wage-floor", type=float, default=0.5)
     parser.add_argument("--expand-boost", type=int, default=1)
+    parser.add_argument("--open-bonus", type=float, default=0.0, help="reward per newly opened region")
+    parser.add_argument(
+        "--pool", nargs="+", default=None, help="opponent names to draw from (default: the full league)"
+    )
     parser.add_argument("--first-bonus", type=float, default=0.0, help="per tick while first")
     parser.add_argument(
         "--raw-profit-scale",
