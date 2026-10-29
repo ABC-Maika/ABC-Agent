@@ -20,10 +20,10 @@ from typing import Any
 from retail_simulator.envs import geo_archetypes as geo
 
 HUNTERS_FILE = Path(__file__).with_name("hunters.json")
-ORDERS = ("index", "demand", "ring", "steal", "quiet", "affluent", "mirror", "blocker", "calm", "calm2", "hyb1", "hyb3")
+ORDERS = ("index", "demand", "ring", "steal", "quiet", "affluent", "mirror", "blocker", "calm", "calm2", "hyb1", "hyb3", "score")
 DEFAULT = {
     "price": 2.0, "marketing": 1.0, "assortment": 1.0, "promotion": 1.0, "service": 1.0, "research": 0.2,
-    "wage": 0.45, "smart_pay": 1, "cap": 12, "order": "demand", "early_price": 0.0, "switch_tick": 0,
+    "wage": 0.45, "smart_pay": 1, "cap": 12, "order": "demand", "early_price": 0.0, "switch_tick": 0, "frugal": 0, "brake_cash": 0.0, "brake_profit": 0.0,
 }
 # Hand-made personas from the organizer's reward-design hints, as starting points for the search.
 PERSONAS = {
@@ -67,6 +67,8 @@ def persona_predict(params: dict[str, Any], n_regions: int = 25) -> Callable[...
     idx = geo._name_to_index(n_regions)
 
     def target(obs: Any) -> int:
+        if p["brake_cash"] and float(obs[idx["cash"]]) < p["brake_cash"] and float(obs[idx["last_profit"]]) < p["brake_profit"]:
+            return 0  # stores are not paying for themselves: do not open another one
         if p["order"] == "ring":
             return _ring_target(obs, idx, n_regions, int(p["cap"]))
         if float(obs[idx["stores"]]) >= p["cap"]:
@@ -85,6 +87,10 @@ def persona_predict(params: dict[str, Any], n_regions: int = 25) -> Callable[...
         if p["order"] == "mirror":  # our own v5 opening: METRO then AFFLUENT, highest number first
             pool = [r for r in empty if cls(r) in (0, 1)] or empty
             return min(pool, key=lambda r: (cls(r), -r))
+        if p["order"] == "score":  # demand / (1 + k * rivals): k < 0 walks INTO crowds (aggressive), k > 0 avoids them
+            pool = [r for r in empty if cls(r) in (0, 1)] or empty
+            k = p.get("k", 0.0)
+            return min(pool, key=lambda r: (-({0: 1400.0, 1: 900.0}.get(cls(r), 500.0) / max(0.2, 1.0 + k * rivals(r))), -r))
         if p["order"] in ("hyb1", "hyb3"):  # v5 order unless rivals already sit there
             pool = [r for r in empty if cls(r) in (0, 1)] or empty
             v5 = sorted(pool, key=lambda r: (cls(r), -r))
@@ -114,14 +120,15 @@ def persona_predict(params: dict[str, Any], n_regions: int = 25) -> Callable[...
         tick[0] += 1
         price = p["early_price"] if (p["early_price"] and t < p["switch_tick"]) else p["price"]
         wage = p["wage"]
+        frugal = t < p["frugal"]  # opening: no research or wage so cash stays above the store gate on round 3
         if p["smart_pay"]:
             wage = min(1.0, wage + 4.0 * (1.0 - float(obs[idx["employee_happiness"]])))
         return encode_action(
             geo._structured_action(
                 price=price, marketing=p["marketing"], assortment=p["assortment"],
-                promotion=p["promotion"], expansion_choice=target(obs), research=p["research"],
+                promotion=p["promotion"], expansion_choice=target(obs), research=0.0 if frugal else p["research"],
                 service_level=p["service"], automation_tier=0, loyalty_spend=0.0,
-                n_regions=n_regions, wage_spend=wage, warehouse_invest=0.0,
+                n_regions=n_regions, wage_spend=0.0 if frugal else wage, warehouse_invest=0.0,
             )
         )
 
@@ -140,6 +147,16 @@ CONTENDERS = {
     "h3t3": {**DEFAULT, "order": "hyb3", "thr": 3},
     "h3t4": {**DEFAULT, "order": "hyb3", "thr": 4},
     "calm2": {**DEFAULT, "order": "calm2"},
+    "brk": {**DEFAULT, "order": "mirror", "brake_cash": 2500.0, "brake_profit": 60.0},
+    "brk-calm2": {**DEFAULT, "order": "calm2", "brake_cash": 2500.0, "brake_profit": 60.0},
+    "brk-h3t1": {**DEFAULT, "order": "hyb3", "thr": 1, "brake_cash": 2500.0, "brake_profit": 60.0},
+    "h3t1": {**DEFAULT, "order": "hyb3", "thr": 1},
+    "w40": {**DEFAULT, "order": "score", "k": 0.0, "wage": 0.40},
+    "k02": {**DEFAULT, "order": "score", "k": 0.2},
+    "w40k02": {**DEFAULT, "order": "score", "k": 0.2, "wage": 0.40},
+    "r0": {**DEFAULT, "order": "mirror", "research": 0.0},
+    "f2": {**DEFAULT, "order": "mirror", "frugal": 2},
+    "r0f2": {**DEFAULT, "order": "mirror", "research": 0.0, "frugal": 2},
     "p15": {**DEFAULT, "order": "mirror", "price": 1.5},
     "p17-early": {**DEFAULT, "order": "mirror", "early_price": 1.5, "switch_tick": 150, "price": 1.9},
 }
