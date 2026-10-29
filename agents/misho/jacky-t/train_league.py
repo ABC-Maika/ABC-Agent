@@ -110,6 +110,7 @@ class LeagueEnv(gym.Env):
         prime_weight: float = 0.0,
         first_bonus: float = 0.0,
         open_bonus: float = 0.0,
+        open_bonus_ticks: int = 200,
         research_cap: float | None = None,
         raw_profit_scale: float | None = None,
         lead_shaping: float = 0.0,
@@ -132,6 +133,7 @@ class LeagueEnv(gym.Env):
         # ``first_bonus``: per tick while Jacky-T is first by cumulative profit (after the warm-up).
         self.first_bonus = first_bonus
         self.open_bonus = open_bonus
+        self.open_bonus_ticks = open_bonus_ticks
         self._stores = 1
         # ``prime_weight``: extra reward per tick for the demand-weighted market share held in the
         # METRO (1, 5, 9, ...) and AFFLUENT (2, 6, 10, ...) regions, the two biggest-demand classes
@@ -233,7 +235,7 @@ class LeagueEnv(gym.Env):
         if self.raw_profit_scale is not None:
             reward *= self.raw_profit_scale  # profit mode: the world returns raw profit
         reward += self._rank_shaping() + self._lead_shaping()
-        if self.open_bonus:
+        if self.open_bonus and self.t <= self.open_bonus_ticks:
             # Aggression: a one-off reward each time the learner opens a new region (the clone stalls
             # at 3 stores when a rival contests its regions; the teachers keep expanding to 12).
             stores = int(np.sum(self.world._state.retailers[LEARNER].stores_per_region))
