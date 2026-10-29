@@ -191,7 +191,8 @@ def cmd_dagger(args: argparse.Namespace) -> None:
     obs, act = collect_league(params, pool + hard if args.hard_frac > 0 else pool, args.episodes, 5000, args.workers)
     print(f"initial expert data {obs.shape} ({int(time.time() - t0)}s)", flush=True)
     scale = np.maximum(np.abs(obs).max(axis=(0, 1)), 1.0) * 1.5
-    model = RecurrentPPO("MlpLstmPolicy", DummyVecEnv([lambda: ko.NpcFieldEnv(0)]), seed=0, device="cpu", verbose=0)
+    kwargs = {"lstm_hidden_size": args.hidden} if args.hidden else {}  # a larger LSTM fits the expert better (0 = SB3 default 256)
+    model = RecurrentPPO("MlpLstmPolicy", DummyVecEnv([lambda: ko.NpcFieldEnv(0)]), policy_kwargs=kwargs, seed=0, device="cpu", verbose=0)
     pol = model.policy
     hidden = pol.lstm_actor.hidden_size
     layout = flatten_action_space_layout()
@@ -270,6 +271,7 @@ def cmd_dagger(args: argparse.Namespace) -> None:
         print(f"iter {it}: learner mean score in its own rollouts {np.mean([r[2] for r in res]):,.0f} (min {np.min([r[2] for r in res]):,.0f}); data {obs.shape[0]} episodes ({int(time.time() - t0)}s)", flush=True)
         loss = fit(obs, act, args.epochs_iter, args.lr * 0.5)
         save_folded(out_zip)
+        save_folded(f"{out_zip[:-4]}_it{it}.zip")  # keep every iteration: the last one is not always the best
         print(f"iter {it}: refit loss {loss:.4f} -> {out_zip} ({int(time.time() - t0)}s)", flush=True)
     print(f"done in {int(time.time() - t0)}s", flush=True)
 
@@ -473,6 +475,7 @@ def main() -> None:
     d.add_argument("--init", default=None, help="continue from this trained zip instead of cloning from scratch")
     d.add_argument("--orcho", default=None, help="zip of an opponent agent to include in most rollouts")
     d.add_argument("--orcho-frac", type=float, default=0.6)
+    d.add_argument("--hidden", type=int, default=0, help="LSTM hidden size for a fresh clone (0 = SB3 default 256)")
     d.add_argument("--threads", type=int, default=10)
     d.add_argument("--workers", type=int, default=11)
     t = sub.add_parser("tournament")
