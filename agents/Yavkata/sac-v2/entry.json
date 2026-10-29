@@ -1,0 +1,8 @@
+{
+  "team": "TODO-team-name",
+  "agent_name": "YavkataSACv2",
+  "policy_kind": "sac",
+  "contact": "yavormomchev2009@abv.bg",
+  "training_recipe": "agents/Yavkata/sac-v2/train_v2.py: scripted low-service (0.15) demonstrator, 3 DAgger rounds (script_search*.py) behaviour-cloned into a SAC actor with 2 DAgger rounds, critics warmed 3000 TD steps in the Orcho/Krischo field, obs scale folded, expansion masking; checkpoint = warm start, no SAC phase (SAC steps made it worse)",
+  "sb3_version": "2.9.2"
+}
