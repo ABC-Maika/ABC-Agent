@@ -25,7 +25,7 @@ import gymnasium as gym
 import numpy as np
 import torch
 from aggressive_npcs import register
-from stable_baselines3 import A2C
+from stable_baselines3 import A2C, PPO
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecNormalize
 from train_vs_npcs import HAPPINESS_BONUS
@@ -47,14 +47,22 @@ SCRIPTED = (
     "fast-follower+",
     "sprawler+",
     "orcho-recipe",
+    "hunter-1",
+    "hunter-2",
+    "hunter-3",
+    "hunter-4",
+    "contender-calm2",
 )
-ZIPS = {  # trained opponents in the TRAINING zoo (teammates are held out)
+ZIPS = {  # trained opponents in the league zoo
     "rival-a2c-s1": "runs/serious/rival-a2c-s1.zip",
     "rival-a2c-s2": "runs/serious/rival-a2c-s2.zip",
     "rival-a2c-s3": "runs/serious/rival-a2c-s3.zip",
     "rival-ppo-profit": "runs/serious/rival-ppo-profit.zip",
     "rival-ppo-weighted": "runs/serious/rival-ppo-weighted.zip",
     "clone-v1": "agents/orcho/market-share/checkpoint.zip",
+    "krischo-mlp-v8": "agents/Krischo/mlp-v8/checkpoint.zip",
+    "krischo-mlp-v6": "agents/Krischo/mlp-v6/checkpoint.zip",
+    "krischo-lstm-v8": "agents/Krischo/rppo-lstm/checkpoint_v8.zip",
 }
 
 
@@ -184,6 +192,13 @@ def main() -> int:
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--std", type=float, default=0.135, help="exploration noise (action std)")
     parser.add_argument("--n-envs", type=int, default=4)
+    parser.add_argument("--algo", choices=["a2c", "ppo"], default="a2c", help="ppo: copy the clone's weights into a PPO policy (clipped updates, safer)")
+    parser.add_argument("--batch-size", type=int, default=128, help="PPO minibatch")
+    parser.add_argument("--ppo-epochs", type=int, default=4)
+    parser.add_argument("--gamma", type=float, default=0.99, help="0.999 for the long arena game (guides/)")
+    parser.add_argument("--warmup", type=int, default=0, help="first N of --steps: policy frozen, only the critic learns")
+    parser.add_argument("--warmup-lr", type=float, default=1e-4, help="critic learning rate during the warm-up")
+    parser.add_argument("--n-steps", type=int, default=5, help="rollout length per update; longer = less noisy gradients")
     parser.add_argument("--scratch", action="store_true", help="no clone: a fresh network, all inputs open")
     parser.add_argument("--subproc", action="store_true", help="one worker process per environment")
     parser.add_argument(
@@ -213,6 +228,8 @@ def main() -> int:
             "MlpPolicy",
             venv,
             learning_rate=args.lr,
+            gamma=args.gamma,
+            n_steps=args.n_steps,
             ent_coef=0.0,
             verbose=1,
             device="cpu",
@@ -230,11 +247,19 @@ def main() -> int:
             args.start,
             env=venv,
             device="cpu",
-            custom_objects={"learning_rate": args.lr, "lr_schedule": lambda _: args.lr},
+            custom_objects={"learning_rate": args.lr, "lr_schedule": lambda _: args.lr, "gamma": args.gamma, "n_steps": args.n_steps},
         )
+        if args.algo == "ppo":  # same network shape; only the learning rule changes
+            ppo = PPO(
+                "MlpPolicy", venv, learning_rate=args.lr, gamma=args.gamma, n_steps=args.n_steps,
+                batch_size=args.batch_size, n_epochs=args.ppo_epochs, ent_coef=0.0, device="cpu",
+                policy_kwargs={"net_arch": {"pi": [256, 256], "vf": [64, 64]}},
+            )
+            ppo.policy.load_state_dict(model.policy.state_dict())
+            model = ppo
         # Un-fold the clone's scale so training sees obs/scale, and open the inputs it ignored.
         names = geo._name_to_index(25)
-        relevant = [names["stores"]] + [names[f"stores_region_{r}"] for r in range(1, 25)]
+        relevant = [names["stores"], names["employee_happiness"]] + [names[f"stores_region_{r}"] for r in range(1, 25)]
         closed = np.ones(318, dtype=bool)
         closed[relevant] = False
         closed_t = torch.as_tensor(closed)
@@ -242,16 +267,26 @@ def main() -> int:
             for seq in (model.policy.mlp_extractor.policy_net, model.policy.mlp_extractor.value_net):
                 w = seq[0].weight
                 w *= torch.as_tensor(scale, dtype=w.dtype)[None, :]
-                w[:, closed_t] = torch.randn_like(w)[:, closed_t] * 0.01
+                w[:, closed_t] = 0.0  # step 0 = the clone exactly; RL can still grow these weights
             model.policy.log_std.fill_(float(np.log(args.std)))
-    model.learn(total_timesteps=args.steps)
+    if args.warmup:  # a fresh critic gives noisy advantages; let it catch up while the policy stays exactly v5
+        actor = [*model.policy.mlp_extractor.policy_net.parameters(), *model.policy.action_net.parameters(), model.policy.log_std]
+        for prm in actor:
+            prm.requires_grad_(False)
+        lr_now = model.lr_schedule
+        model.lr_schedule = lambda _: args.warmup_lr
+        model.learn(total_timesteps=args.warmup)
+        for prm in actor:
+            prm.requires_grad_(True)
+        model.lr_schedule = lr_now
+    model.learn(total_timesteps=args.steps - args.warmup, reset_num_timesteps=not args.warmup)
     with torch.no_grad():
         for seq in (model.policy.mlp_extractor.policy_net, model.policy.mlp_extractor.value_net):
             seq[0].weight /= torch.as_tensor(scale, dtype=seq[0].weight.dtype)[None, :]
     args.out.parent.mkdir(parents=True, exist_ok=True)
     model.save(args.out)
-    meta = {"algo": "a2c", "reward": "league", "steps": args.steps, "seed": 0, "ent_coef": 0.0,
-            "start": "scratch" if args.scratch else "clone", "gap_bonus": args.gap_bonus}
+    meta = {"algo": args.algo, "reward": "league", "steps": args.steps, "seed": 0, "ent_coef": 0.0,
+            "start": "scratch" if args.scratch else "clone", "gap_bonus": args.gap_bonus, "warmup": args.warmup}
     args.out.with_suffix(".json").write_text(json.dumps(meta) + "\n")
     print(f"saved {args.out}")
     return 0

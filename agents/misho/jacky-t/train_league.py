@@ -44,6 +44,9 @@ from stable_baselines3.common.monitor import Monitor  # noqa: E402
 from stable_baselines3.common.utils import set_random_seed  # noqa: E402
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv  # noqa: E402
 
+from aggressive_npcs import register as register_personas  # noqa: E402
+from anchored_tqc import AnchoredTQC, load_demos  # noqa: E402
+from retail_simulator.envs import arena_match  # noqa: E402
 from gymnasium import spaces  # noqa: E402
 from retail_simulator.core.encoding import flatten_action_space_layout  # noqa: E402
 from retail_simulator.envs.arena import arena_balanced_config, arena_home_regions  # noqa: E402
@@ -61,10 +64,16 @@ OPPONENTS: dict[str, str] = {  # the trained agents on main
     "yavkata": "agents/Yavkata/recurrent-ppo/checkpoint.zip",
     "orcho": "agents/orcho/market-share/checkpoint.zip",
     "jack": "agents/misho/jack/checkpoint.zip",
+    "kmlp6": "agents/Krischo/mlp-v6/checkpoint.zip",
+    "kmlp8": "agents/Krischo/mlp-v8/checkpoint.zip",
+    "orcho-v5": "agents/orcho/v5/checkpoint.zip",
+    "yav-sac": "agents/Yavkata/sac/checkpoint.zip",
     # Hall of fame: a frozen copy of Jacky-T v1.1, so a new candidate cannot win by forgetting it.
     "jacky-v11": "runs/hof/jacky_v11.zip",
 }
 YARDSTICKS = ("cherry-picker",)  # a scripted archetype that never changes
+# The teammates' scripted sparring partners (scripts/aggressive_npcs.py): distinct, strong styles.
+PERSONAS = ("cherry-picker+", "fast-follower+", "sprawler+", "orcho-recipe2")
 EPISODE_OPPONENTS = N_SEATS - 1
 
 
@@ -101,11 +110,51 @@ class LeagueEnv(gym.Env):
         any_home: float = 0.0,
         prime_weight: float = 0.0,
         first_bonus: float = 0.0,
+        open_bonus: float = 0.0,
+        open_bonus_ticks: int = 200,
+        happy_penalty: float = 0.0,
+        research_pulse: bool = False,
+        open_value: bool = False,
+        debt_penalty: float = 0.0,
+        opening_bonus: float = 0.0,
+        open_early_mult: float = 1.0,
+        fixed_homes: Sequence[int] | None = None,
+        crowd_rule: int = 0,
         research_cap: float | None = None,
+        raw_profit_scale: float | None = None,
+        lead_shaping: float = 0.0,
+        shaping_fade_episodes: int = 0,
+        shaping_gamma: float = 0.99,
     ) -> None:
         super().__init__()
+        register_personas()  # the teammates' scripted personas (cherry-picker+, orcho-recipe2, ...)
+        # ``raw_profit_scale``: train on raw post-penalty profit x this factor. The weighted mode
+        # z-scores every component against the seat's own running mean in the episode, so steady
+        # high profit earns ~0 there; raw profit pays for the level that scoring ranks on.
+        self.raw_profit_scale = raw_profit_scale
+        # ``lead_shaping``: potential-based shaping on the lead over the best rival,
+        # F = k * (gamma * lead' - lead) * scale. Summed over a match it pays the final margin over
+        # the best rival (the "finish first" goal) without changing which policy is optimal. It
+        # fades linearly to 0 over ``shaping_fade_episodes`` episodes of this env copy.
+        self.lead_shaping, self.shaping_fade = lead_shaping, shaping_fade_episodes
+        self.shaping_gamma = shaping_gamma
+        self.episodes = -1
         # ``first_bonus``: per tick while Jacky-T is first by cumulative profit (after the warm-up).
         self.first_bonus = first_bonus
+        self.open_bonus = open_bonus
+        self.open_bonus_ticks = open_bonus_ticks
+        self.happy_penalty = happy_penalty
+        self.research_pulse = research_pulse
+        self.open_value = open_value
+        self.debt_penalty = debt_penalty
+        self.opening_bonus = opening_bonus
+        self.crowd_rule = crowd_rule
+        self.fixed_homes = tuple(fixed_homes) if fixed_homes is not None else None
+        self.open_early_mult = open_early_mult
+        self._owned = np.zeros(0, dtype=bool)
+        self._research_at = next(
+            s.offset for s in flatten_action_space_layout().levers if s.spec.name == "research"
+        )
         # ``prime_weight``: extra reward per tick for the demand-weighted market share held in the
         # METRO (1, 5, 9, ...) and AFFLUENT (2, 6, 10, ...) regions, the two biggest-demand classes
         # (mean base demand 1,400 and 900, against 600 and 350 for LOYAL and FRONTIER).
@@ -116,22 +165,25 @@ class LeagueEnv(gym.Env):
         self.any_home = any_home
         # ``pool``: opponent candidates (OPPONENTS keys or geo archetype names). Five are drawn per
         # episode, so line-ups vary; the default is every trained agent plus the yardstick.
-        self.pool = list(pool) if pool is not None else [*OPPONENTS, *YARDSTICKS]
+        self.pool = list(pool) if pool is not None else [*OPPONENTS, *YARDSTICKS, *PERSONAS]
         self.neg_penalty = neg_penalty
         self.np_random, _ = seeding.np_random(seed)
         profit, revenue, share, loyalty = weights
         base_config = arena_balanced_config()
-        self.config = replace(
-            base_config,
-            reward=replace(
-                base_config.reward,
-                mode="weighted",
-                weight_profit=profit,
-                weight_revenue=revenue,
-                weight_market_share=share,
-                weight_loyalty=loyalty,
-            ),
-        )
+        if raw_profit_scale is not None:
+            self.config = replace(base_config, reward=replace(base_config.reward, mode="profit"))
+        else:
+            self.config = replace(
+                base_config,
+                reward=replace(
+                    base_config.reward,
+                    mode="weighted",
+                    weight_profit=profit,
+                    weight_revenue=revenue,
+                    weight_market_share=share,
+                    weight_loyalty=loyalty,
+                ),
+            )
         self.scale = obs_scale.astype(np.float32)
         self.bonus, self.penalty, self.rank_warmup, self.ticks = bonus, penalty, rank_warmup, ticks
         self.homes = arena_home_regions(N_SEATS)
@@ -147,7 +199,10 @@ class LeagueEnv(gym.Env):
 
     def _predict(self, name: str) -> Any:
         if name not in OPPONENTS:  # a scripted archetype: a fresh closure, it carries a tick counter
-            roster = geo_archetypes(len(self.config.demand.regions), self.config.demand.regions)
+            # ``arena_match.geo_archetypes`` includes the personas once ``register_personas`` ran.
+            roster = arena_match.geo_archetypes(
+                len(self.config.demand.regions), self.config.demand.regions
+            )
             return roster[name]
         if name not in self._predicts:
             self._predicts.update(
@@ -166,6 +221,8 @@ class LeagueEnv(gym.Env):
             n_regions = len(self.config.demand.regions)
             drawn = self.np_random.choice(np.arange(1, n_regions), size=N_SEATS, replace=False)
             homes = tuple(int(h) for h in drawn)
+        elif self.fixed_homes is not None:
+            homes = self.fixed_homes
         else:
             homes = tuple(int(h) for h in self.np_random.permutation(self.homes))
         names = rng.sample(self.pool, EPISODE_OPPONENTS)
@@ -181,6 +238,9 @@ class LeagueEnv(gym.Env):
         self._obs, _ = self.world.reset(seed=int(self.np_random.integers(0, 2**31 - 1)))
         self.cum = np.zeros(N_SEATS)
         self.t = 0
+        self.episodes += 1
+        self._lead_phi = 0.0
+        self._owned = np.asarray(self.world._state.retailers[LEARNER].stores_per_region) > 0
         return self._learner_obs(), {"homes": homes, "opponents": names}
 
     def step(self, action: np.ndarray) -> Any:
@@ -190,15 +250,78 @@ class LeagueEnv(gym.Env):
             acts[agent] = np.asarray(
                 predict(self._obs[agent], episode_start=self.t == 0), dtype=np.float32
             ).ravel()
+        if self.research_pulse and self.t % 10 == 0:
+            # Training-side rule: every 10th round, while not first by cumulative profit, spend 0.4 on
+            # research (the stored action stays the policy's own, so this nudges play, it is not shipped).
+            if int((np.delete(self.cum, LEARNER) > self.cum[LEARNER]).sum()) > 0:
+                acts[self.agents_[LEARNER]] = self._with_research(acts[self.agents_[LEARNER]])
         self._obs, rewards, _, _, infos = self.world.step(acts)
         self.t += 1
         self.cum += [infos[a]["components"]["profit"] for a in self.agents_]
-        reward = float(rewards[self.agents_[LEARNER]]) + self._rank_shaping()
+        reward = float(rewards[self.agents_[LEARNER]])
+        if self.raw_profit_scale is not None:
+            reward *= self.raw_profit_scale  # profit mode: the world returns raw profit
+        reward += self._rank_shaping() + self._lead_shaping()
+        if self.open_bonus and self.t <= self.open_bonus_ticks:
+            # Aggression: a one-off reward each time the learner opens a new region (the clone stalls
+            # at 3 stores when a rival contests its regions; the teachers keep expanding to 12).
+            retailers = self.world._state.retailers
+            mine = np.asarray(retailers[LEARNER].stores_per_region) > 0
+            if self.open_value:
+                # Value of a region = its demand split over the agents already there (with equal
+                # levers an agent gets 1/n of a region): METRO 1400, AFFLUENT 900, LOYAL 600, FRONTIER
+                # 350, divided by (rivals present + 1). The bonus is scaled so a METRO with one rival
+                # (700) pays the base bonus; crowded regions pay less, so a lower class wins there.
+                demand = np.array([r.base_regional_demand for r in self.config.demand.regions])
+                rivals = sum(
+                    (np.asarray(retailers[k].stores_per_region) > 0).astype(int)
+                    for k in range(N_SEATS)
+                    if k != LEARNER
+                )
+                gained = mine & ~self._owned
+                reward += self.open_bonus * float((demand / (1 + rivals) / 700.0)[gained].sum())
+            elif self.crowd_rule:
+                # Crowd rule: open a region only while at most ``crowd_rule`` rivals are already in it;
+                # a more crowded region (a METRO with 3+ owners) is penalised, so the policy goes to
+                # the next class down (AFFLUENT, then LOYAL, then FRONTIER). The reward is scaled by the
+                # region's demand (METRO 1.0, AFFLUENT 0.64, LOYAL 0.43, FRONTIER 0.25).
+                demand = np.array([r.base_regional_demand for r in self.config.demand.regions])
+                rivals = sum(
+                    (np.asarray(retailers[k].stores_per_region) > 0).astype(int)
+                    for k in range(N_SEATS)
+                    if k != LEARNER
+                )
+                gained = mine & ~self._owned
+                sign = np.where(rivals <= self.crowd_rule, 1.0, -1.0)
+                mult = self.open_early_mult if self.t <= 10 else 1.0
+                reward += self.open_bonus * mult * float((sign * demand / 1400.0)[gained].sum())
+            else:
+                mult = self.open_early_mult if self.t <= 10 else 1.0
+                reward += self.open_bonus * mult * int((mine & ~self._owned).sum())
+            self._owned = self._owned | mine
+        if self.opening_bonus and self.t == 4:
+            reward += self.opening_bonus * float(
+                int(np.sum(self.world._state.retailers[LEARNER].stores_per_region)) >= 4
+            )
+        if self.debt_penalty:
+            # The world closes all but 3 stores once cash stays below -10,000 for 50 rounds; start
+            # pushing back at -5,000 (cash guard).
+            cash = float(self.world._state.retailers[LEARNER].cash)
+            reward -= self.debt_penalty * max(0.0, -5000.0 - cash) / 5000.0
+        if self.happy_penalty:
+            # Unpaid staff (happiness near 0) trigger the write-off penalty; RL drove wages to ~0.02.
+            happy = float(self.world._state.retailers[LEARNER].employee_happiness)
+            reward -= self.happy_penalty * max(0.0, 0.5 - happy)
         if self.prime_weight:
-            shares = np.asarray(self._obs[self.agents_[LEARNER]])[self._prime_idx]
+            shares =np.asarray(self._obs[self.agents_[LEARNER]])[self._prime_idx]
             reward += self.prime_weight * float(shares @ self._prime_w)
         rank = int((self.cum > self.cum[LEARNER]).sum()) + 1
         return self._learner_obs(), reward, False, self.t >= self.ticks, {"rank": rank}
+
+    def _with_research(self, action: np.ndarray) -> np.ndarray:
+        action = np.array(action, dtype=np.float32)
+        action[self._research_at] = 0.4
+        return action
 
     def _rank_shaping(self) -> float:
         if self.t < self.rank_warmup:
@@ -214,6 +337,18 @@ class LeagueEnv(gym.Env):
         if rank == 1 and mine > 0 and mine - rivals.max() > 0.5 * mine:
             return shaping + self.bonus
         return shaping
+
+    def _lead_shaping(self) -> float:
+        if not self.lead_shaping:
+            return 0.0
+        fade = 1.0
+        if self.shaping_fade:
+            fade = max(0.0, 1.0 - self.episodes / self.shaping_fade)
+        scale = self.raw_profit_scale or 1e-3
+        phi = (self.cum[LEARNER] - np.delete(self.cum, LEARNER).max()) * scale
+        shaped = self.lead_shaping * fade * (self.shaping_gamma * phi - self._lead_phi)
+        self._lead_phi = phi
+        return float(shaped)
 
     def _learner_obs(self) -> np.ndarray:
         return (self._obs[self.agents_[LEARNER]] / self.scale).astype(np.float32)
@@ -233,7 +368,20 @@ def make_one(seed: int, obs_scale: np.ndarray, args: argparse.Namespace) -> Moni
             any_home=args.any_home,
             prime_weight=args.prime_weight,
             first_bonus=args.first_bonus,
+            open_bonus=args.open_bonus,
+            happy_penalty=args.happy_penalty,
+            research_pulse=args.research_pulse,
+            open_value=args.open_value,
+            debt_penalty=args.debt_penalty,
+            opening_bonus=args.opening_bonus,
+            crowd_rule=args.crowd_rule,
+            open_early_mult=args.open_early_mult,
             research_cap=args.research_cap,
+            raw_profit_scale=args.raw_profit_scale,
+            lead_shaping=args.lead_shaping,
+            shaping_fade_episodes=args.shaping_fade_episodes,
+            shaping_gamma=args.gamma or 0.99,
+            pool=args.pool,
         ),
         info_keywords=("rank",),
     )
@@ -253,11 +401,20 @@ def train(args: argparse.Namespace) -> TQC:
     venv = SubprocVecEnv(env_fns) if args.subproc else DummyVecEnv(env_fns)
     venv.action_space.seed(args.seed)
     # The saved action space (research cap included) must match the env's, so it is passed in.
-    model = TQC.load(
+    learner = AnchoredTQC if args.anchor_data else TQC
+    model = learner.load(
         args.resume,
         env=venv,
         custom_objects={"action_space": capped_action_space(args.research_cap)},
     )
+    if args.anchor_data:
+        demo_obs, demo_act = load_demos(
+            args.anchor_data, args.anchor_max_rank, args.anchor_wage_floor, args.expand_boost,
+            args.anchor_early_wage,
+            args.frugal_opening,
+        )
+        model.set_demos(demo_obs, demo_act, args.anchor_alpha)
+        print(f"anchoring the actor to {len(demo_obs)} teacher samples (alpha {args.anchor_alpha})")
     if args.gamma is not None:
         model.gamma = args.gamma  # a longer horizon: the default discount looks ~100 rounds ahead
     done = int(model.num_timesteps)
@@ -370,7 +527,40 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="probability that an episode draws its six homes from all 24 enterable regions "
         "(otherwise the six published metro homes, shuffled over the seats)",
     )
+    parser.add_argument(
+        "--anchor-data",
+        type=Path,
+        nargs="+",
+        help="teacher recordings (mimic.py collect): anchors the actor update to them (TD3+BC)",
+    )
+    parser.add_argument("--anchor-alpha", type=float, default=2.5, help="RL weight vs the anchor")
+    parser.add_argument("--anchor-max-rank", type=int, default=2)
+    parser.add_argument("--anchor-wage-floor", type=float, default=0.5)
+    parser.add_argument("--expand-boost", type=int, default=1)
+    parser.add_argument("--open-bonus", type=float, default=0.0, help="reward per newly opened region")
+    parser.add_argument("--happy-penalty", type=float, default=0.0)
+    parser.add_argument("--research-pulse", action="store_true")
+    parser.add_argument("--open-value", action="store_true")
+    parser.add_argument("--anchor-early-wage", type=float, default=0.0)
+    parser.add_argument("--debt-penalty", type=float, default=0.0)
+    parser.add_argument("--frugal-opening", action="store_true")
+    parser.add_argument("--crowd-rule", type=int, default=0, help="max rivals already in a region to open it")
+    parser.add_argument("--opening-bonus", type=float, default=0.0)
+    parser.add_argument("--open-early-mult", type=float, default=1.0)
+    parser.add_argument(
+        "--pool", nargs="+", default=None, help="opponent names to draw from (default: the full league)"
+    )
     parser.add_argument("--first-bonus", type=float, default=0.0, help="per tick while first")
+    parser.add_argument(
+        "--raw-profit-scale",
+        type=float,
+        default=None,
+        help="train on raw profit x this (e.g. 1e-3) instead of the self-normalized weighted reward",
+    )
+    parser.add_argument("--lead-shaping", type=float, default=0.0, help="potential-based lead term")
+    parser.add_argument(
+        "--shaping-fade-episodes", type=int, default=0, help="per env copy; 0 = never fade"
+    )
     parser.add_argument(
         "--research-cap", type=float, default=None, help="upper bound of the research lever"
     )
@@ -391,6 +581,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     model = train(args)
     args.out.parent.mkdir(parents=True, exist_ok=True)
+    jacky.stock_schedule(model)
     model.save(args.out)
     print(f"saved {args.out}")
     return 0
