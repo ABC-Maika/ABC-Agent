@@ -7,8 +7,10 @@ seat earns +874k, so we start from it:
      fill the replay buffer with those transitions;
   2. clone it into the actor (MSE on the squashed action), then shrink the actor's exploration noise;
   3. warm the critics with TD updates on the same buffer, so the first SAC actor steps do not wreck the clone;
-  4. train SAC with a fixed small entropy coefficient and a small reward penalty while the opening cash race
-     is on (ticks 1-60, cash < one store, fewer than 5 stores).
+  4. train SAC with a fixed small entropy coefficient, a small reward penalty while the opening cash race
+     is on (ticks 1-60, cash < one store, fewer than 5 stores), and a debt penalty that ramps from cash 0 to the
+     -5000 credit line and jumps beyond it (the death spiral seen in battle N71H-JDQF, see ``debt_penalty``).
+     The demonstrator also keeps one extra store's capex in reserve before opening store 9+.
 The saved zip takes RAW observations (obs scale folded into the first layers, as in ``train_vs_npcs.py``).
 
 Run from the repo root:
@@ -42,9 +44,34 @@ OPENING_TICKS = 60
 OPENING_PENALTY = 0.005  # reward units (after the 1e-3 scale) per tick of the cash race
 DEMO_NOISE = 0.03  # std of gaussian noise on the demonstrator's squashed action
 
+# Battle N71H-JDQF (6 rotations x 1000 rounds): 8 of 12 Yavkata seat-matches ended in a cash death spiral.
+# Cash below -CREDIT_LIMIT (the arena's credit line, credit=5000) leaves wages unpaid, happiness drops to ~0 within
+# 10-30 rounds, market share falls to ~2.5%, a store is written off and the seat then loses ~240/round to the end
+# (about -250k a match). NIGA and Krischo never went below ~0. So the reward punishes the slide into debt, not only
+# the lost profit, and the demonstrator keeps a cash reserve once it already runs many stores.
+CREDIT_LIMIT = 5_000.0
+DEBT_PENALTY = 0.02  # per tick with cash < 0, plus up to DEBT_SLOPE more as cash approaches -CREDIT_LIMIT
+DEBT_SLOPE = 0.03
+SPIRAL_PENALTY = 0.10  # per tick beyond the credit line (the point of no return in the battle)
+LATE_STORES = 8  # YavSAC_NEW opened a 9th store at round 760 with 10k cash and went bust by round 960
+LATE_RESERVE = field.EXPANSION_CAPEX  # extra cash kept on top of one store's capex for stores >= LATE_STORES
+
+
+def debt_penalty(cash: float, scale: float = 1.0) -> float:
+    """Shaped reward penalty for being in debt: 0 at cash >= 0, ramps to the credit line, jumps beyond it."""
+    if cash >= 0.0:
+        return 0.0
+    depth = min(1.0, -cash / CREDIT_LIMIT)
+    penalty = DEBT_PENALTY + DEBT_SLOPE * depth
+    if cash < -CREDIT_LIMIT:
+        penalty += SPIRAL_PENALTY
+    return penalty * scale
+
 
 class OpeningEnv(field.FieldEnv):
-    """``FieldEnv`` plus a small penalty while the opening cash race is lost."""
+    """``FieldEnv`` plus a small penalty in the opening cash race and a penalty for sliding into debt."""
+
+    debt_scale = 1.0
 
     def step(self, action: npt.NDArray[np.float32]):
         obs, reward, terminated, truncated, info = super().step(action)
@@ -56,6 +83,7 @@ class OpeningEnv(field.FieldEnv):
             and raw[idx["stores"]] < 5
         ):
             reward -= OPENING_PENALTY
+        reward -= debt_penalty(float(raw[idx["cash"]]), self.debt_scale)
         return obs, reward, terminated, truncated, info
 
 
@@ -77,7 +105,9 @@ def orcho_demo(config: Any, cap: int, order: Sequence[int]):
 
     def predict(obs: npt.NDArray[np.float32], *, episode_start: bool = False, **_: Any):
         target = 0
-        if obs[idx["stores"]] < cap and obs[idx["cash"]] >= field.EXPANSION_CAPEX:
+        stores = obs[idx["stores"]]
+        reserve = LATE_RESERVE if stores >= LATE_STORES else 0.0
+        if stores < cap and obs[idx["cash"]] >= field.EXPANSION_CAPEX + reserve:
             target = next((r for r in order if obs[idx[f"stores_region_{r}"]] == 0), 0)
         wage = min(1.0, 0.45 + 4.0 * (1.0 - float(obs[idx["employee_happiness"]])))
         return encode_action(
@@ -209,6 +239,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     p.add_argument("--clone-steps", type=int, default=4_000)
     p.add_argument("--critic-steps", type=int, default=3_000)
     p.add_argument("--ent-coef", type=float, default=0.01)
+    p.add_argument("--debt-scale", type=float, default=1.0, help="multiplier on the debt/spiral reward penalty (0 = off)")
     p.add_argument("--p-real", type=float, default=0.6, help="chance an Orcho/Krischo seat is the real checkpoint")
     p.add_argument("--n-envs", type=int, default=4)
     p.add_argument("--seed", type=int, default=0)
@@ -219,6 +250,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     field.P_REAL = args.p_real
+    OpeningEnv.debt_scale = args.debt_scale
     base.NpcFieldEnv = OpeningEnv  # make_env_fns and estimate_obs_scale resolve it by name
     set_random_seed(args.seed)
     obs_scale, samples = base.estimate_obs_scale(args.seed)
