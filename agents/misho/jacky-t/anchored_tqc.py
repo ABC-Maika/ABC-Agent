@@ -28,7 +28,7 @@ from retail_simulator.core.encoding import flatten_action_space_layout
 
 
 def load_demos(
-    paths: Sequence[Path], max_rank: int = 0, wage_floor: float = 0.0
+    paths: Sequence[Path], max_rank: int = 0, wage_floor: float = 0.0, expand_boost: int = 1
 ) -> tuple[np.ndarray, np.ndarray]:
     """Teacher recordings from ``mimic.py collect``, with the teachers' flawed episodes removed.
 
@@ -36,6 +36,10 @@ def load_demos(
     ``wage_floor``: staff pay below ~0.5 leaves happiness near 0 and triggers the write-off penalty
     (KrischoV8: wage 0.05, happiness 0.01; Orcho and Krischo at ~0.5 hold happiness at 1.0), so the
     wage target is lifted to this floor.
+
+    ``expand_boost``: rows where the teacher expands (not "hold") are repeated this many times. They are
+    only ~4% of ticks, so a plain fit averages the expansion choice away to "hold" and the clone stays
+    at 3 stores while the teachers grow to 12.
     """
     loaded = [np.load(p) for p in paths]
     obs = np.concatenate([d["obs"] for d in loaded])
@@ -48,6 +52,14 @@ def load_demos(
         for slot in flatten_action_space_layout().levers:
             if slot.spec.name == "wage_spend":
                 act[:, slot.offset] = np.maximum(act[:, slot.offset], wage_floor)
+    if expand_boost > 1:
+        for slot in flatten_action_space_layout().levers:
+            if slot.spec.name == "expansion":
+                block = act[:, slot.offset : slot.offset + slot.width]
+                grow = np.flatnonzero(block.argmax(1) != 0)
+                reps = np.concatenate([np.arange(len(act))] + [grow] * (expand_boost - 1))
+                print(f"expansion rows {len(grow)} x{expand_boost}")
+                obs, act = obs[reps], act[reps]
     return obs, act
 
 

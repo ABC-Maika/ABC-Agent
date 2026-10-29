@@ -95,7 +95,7 @@ def collect(args: argparse.Namespace) -> None:
 
 def behaviour_clone(args: argparse.Namespace) -> None:
     # Drop the teachers' flawed episodes and lift the wage target (see ``load_demos``).
-    obs, act = load_demos(args.data, args.max_rank, args.wage_floor)
+    obs, act = load_demos(args.data, args.max_rank, args.wage_floor, args.expand_boost)
     # With a research cap the saved action space carries the lower bound, and targets above it are
     # clipped to it (the scaled target is clipped to [-1, 1]).
     if args.new_net:
@@ -161,7 +161,7 @@ def main() -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
     scale = Path("runs/jacky_t/league_ckpt/obs_scale.npy")
     c = sub.add_parser("collect")
-    c.add_argument("teacher", choices=("orcho", "krischo-v8", "krischo", "kmlp6"))
+    c.add_argument("teacher", choices=("orcho", "krischo-v8", "krischo", "kmlp6", "kmlp8"))
     c.add_argument("--episodes", type=int, default=10)
     c.add_argument("--seed", type=int, default=100)
     c.add_argument("--scale", type=Path, default=scale)
@@ -173,6 +173,7 @@ def main() -> int:
     b.add_argument("--research-cap", type=float, default=None)
     b.add_argument("--max-rank", type=int, default=0, help="keep teacher episodes ranked this or better")
     b.add_argument("--wage-floor", type=float, default=0.0)
+    b.add_argument("--expand-boost", type=int, default=1, help="repeat expansion rows this many times")
     b.add_argument("--epochs", type=int, default=12)
     b.add_argument("--lr", type=float, default=1e-3)
     b.add_argument("--batch-size", type=int, default=256)

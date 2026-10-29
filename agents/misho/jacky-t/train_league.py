@@ -65,6 +65,7 @@ OPPONENTS: dict[str, str] = {  # the trained agents on main
     "orcho": "agents/orcho/market-share/checkpoint.zip",
     "jack": "agents/misho/jack/checkpoint.zip",
     "kmlp6": "agents/Krischo/mlp-v6/checkpoint.zip",
+    "kmlp8": "agents/Krischo/mlp-v8/checkpoint.zip",
     "yav-sac": "agents/Yavkata/sac/checkpoint.zip",
     # Hall of fame: a frozen copy of Jacky-T v1.1, so a new candidate cannot win by forgetting it.
     "jacky-v11": "runs/hof/jacky_v11.zip",
@@ -310,7 +311,9 @@ def train(args: argparse.Namespace) -> TQC:
         custom_objects={"action_space": capped_action_space(args.research_cap)},
     )
     if args.anchor_data:
-        demo_obs, demo_act = load_demos(args.anchor_data, args.anchor_max_rank, args.anchor_wage_floor)
+        demo_obs, demo_act = load_demos(
+            args.anchor_data, args.anchor_max_rank, args.anchor_wage_floor, args.expand_boost
+        )
         model.set_demos(demo_obs, demo_act, args.anchor_alpha)
         print(f"anchoring the actor to {len(demo_obs)} teacher samples (alpha {args.anchor_alpha})")
     if args.gamma is not None:
@@ -434,6 +437,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--anchor-alpha", type=float, default=2.5, help="RL weight vs the anchor")
     parser.add_argument("--anchor-max-rank", type=int, default=2)
     parser.add_argument("--anchor-wage-floor", type=float, default=0.5)
+    parser.add_argument("--expand-boost", type=int, default=1)
     parser.add_argument("--first-bonus", type=float, default=0.0, help="per tick while first")
     parser.add_argument(
         "--raw-profit-scale",
