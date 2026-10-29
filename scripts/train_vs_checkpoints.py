@@ -1,0 +1,410 @@
+﻿"""Example trainer: one learning seat against FIVE FROZEN CHECKPOINTS, with your own loop.
+
+Adapted from the NPC-field trainer: seats 1-5 are not NPC archetypes but the five checkpoint zips
+given with ``--opponents``. They are loaded once per env copy, play deterministically, and (like
+any ``--player`` in ``arena_competition.py``) are expansion-masked, as is the learner. Only the
+seat-0 learner is trained: from scratch with ``--algo``, or continued from a checkpoint with
+``--init`` (``--algo`` must match its type). Checkpoint kinds (PPO/A2C, SAC, TQC, TD3,
+recurrent) are auto-detected exactly as the arena does it. Example:
+
+    python scripts/train_vs_checkpoints.py mylearner --algo sac --opponents a.zip b.zip c.zip d.zip e.zip
+
+Original NPC-field notes follow (the seating, truncation, scaling and seeding choices still hold).
+
+``scripts/arena_train_player.py`` trains in a two-seat match at fixed home regions (1 and 5).
+This script is the other common baseline: ONE learning seat in the five-seat field the
+self-check plays (``cherry-picker``, ``fortress``, ``fast-follower``, ``sprawler``), as a plain
+Gymnasium env any Stable-Baselines3 algorithm can train on. A starting point, not a tuned entry.
+
+Choices worth knowing, and why they are made:
+
+* Seating. The learner sits in seat 0 with expansion masking ON, like a ``--player`` in
+  ``arena_competition.py``. The NPC seats are driven by ``geo_archetypes`` exactly as
+  ``ArenaMatch`` drives them, and are unmasked.
+* Homes and seeds. Every episode shuffles the six published metro homes (1, 5, 9, 13, 17, 21)
+  across the five seats and draws a fresh world seed, so the policy cannot memorise one seating.
+* Truncation. The raw env never ends an episode, so the wrapper truncates at ``--episode-ticks``
+  (the match length, 1000); SB3 bootstraps through it instead of treating it as terminal.
+* Bounded logits (SAC only). The 35 argmax-decoded logit dims (expansion, automation) are bounded
+  +/-1e9 in the env. SAC squashes through tanh to the bounds, so its logits are bounded to
+  [-1, 1], which decodes identically; continuous levers keep their true bounds. This is rejected
+  for the PPO family: SB3 clips its Gaussian samples, so in ~97% of samples two or more of the
+  32 expansion logits tie at +1 and argmax picks index 0 ~16% of the time (uniform: 3%).
+* Observations are not normalised in the env, since scoring applies no ``VecNormalize``
+  statistics. The PPO family trains on raw observations (cash: 15,000; top NPCs reach ~1e6).
+  SAC trains on ``obs / scale`` (scale from a random warm-up rollout, which an improving policy
+  will exceed) and folds it into the first layers, so the saved zip takes raw observations; the
+  fold is checked on the actor and both critics (outputs match to 1e-5, relative above 1).
+* Rewards are scaled for training only: ``VecNormalize(norm_obs=False)`` for the PPO family, a
+  fixed factor for SAC. SB3's off-policy algorithms store the un-normalised reward, so
+  ``VecNormalize`` would do nothing there. SAC's logged episode reward carries that factor.
+* Seeding follows the README: ``set_random_seed``, not the ``seed=`` argument. Each env copy is
+  built separately with its own seed; cloning one env would replay identical worlds.
+
+Commands: see the README, "Example: train against the NPC field" and "Self-check".
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from dataclasses import replace
+from collections.abc import Callable, Sequence
+from pathlib import Path
+from typing import Any, ClassVar
+
+import gymnasium as gym
+import numpy as np
+import numpy.typing as npt
+import torch
+from gymnasium import spaces
+from gymnasium.utils import seeding
+from stable_baselines3 import A2C, PPO, SAC
+from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.utils import set_random_seed
+from stable_baselines3.common.vec_env import DummyVecEnv, VecEnv, VecNormalize
+
+from retail_simulator.core.encoding import decode_action, flatten_action_space_layout
+from retail_simulator.core.schema import LEVER_REGISTRY, LeverKind
+from retail_simulator.envs.arena import arena_balanced_config, arena_home_regions
+from retail_simulator.envs.ladder.policy import _materialize_predicts
+from retail_simulator.envs.parallel_env import RetailParallelEnv
+from retail_simulator.envs.spaces import build_action_space, build_observation_space
+
+N_OPPONENTS = 5
+LEARNER_SEAT = 0
+N_SEATS = 1 + N_OPPONENTS
+N_METRO_HOMES = 6  # the published rotation: one home per seat of a full six-seat match
+HAPPINESS_BONUS = 300.0  # reward points for fully happy staff (unhappy staff cause random write-offs)
+COVERAGE_BONUS = 30.0  # reward points per continuous lever kept inside COVERAGE_BAND
+COVERAGE_BAND = (0.05, 0.95)  # share of each lever's range; 5 to 95 percent means "in use"
+CONTINUOUS_LEVERS = (
+    "price_index",
+    "marketing",
+    "assortment",
+    "promotion",
+    "research",
+    "service_level",
+    "loyalty_spend",
+    "wage_spend",
+    "warehouse_invest",
+)
+MARKETING_BONUS = 100.0  # reward points per unit of mean awareness (awareness tops out near 3.3)
+SAC_REWARD_SCALE = 1e-3  # per-tick profit is in the hundreds to thousands
+OBS_SCALE_WARMUP_TICKS = 3000
+
+
+def bounded_logit_space(native: spaces.Box) -> spaces.Box:
+    """Copy of ``native`` with every argmax-decoded logit dim bounded to [-1, 1]."""
+    low, high = native.low.copy(), native.high.copy()
+    for slot in flatten_action_space_layout().levers:
+        if slot.spec.kind is LeverKind.DISCRETE:
+            low[slot.offset : slot.offset + slot.width] = -1.0
+            high[slot.offset : slot.offset + slot.width] = 1.0
+    return spaces.Box(low=low, high=high, dtype=np.float32)
+
+
+class NpcFieldEnv(gym.Env):
+    """Seat 0 learns (expansion-masked) against five frozen checkpoints in seats 1-5."""
+
+    metadata: ClassVar[dict[str, Any]] = {"render_modes": []}
+
+    def __init__(
+        self,
+        seed: int,
+        opponents: Sequence[str | Path],
+        *,
+        episode_ticks: int = 1000,
+        bound_logits: bool = False,
+        reward_scale: float = 1.0,
+        obs_scale: npt.NDArray[np.float32] | None = None,
+        reward: str = "profit",
+    ) -> None:
+        super().__init__()
+        if len(opponents) != N_OPPONENTS:
+            raise ValueError(f"need exactly {N_OPPONENTS} opponent checkpoints, got {len(opponents)}")
+        self.np_random, _ = seeding.np_random(seed)
+        self._config = arena_balanced_config()
+        if reward == "weighted":
+            self._config = replace(self._config, reward=replace(self._config.reward, mode="weighted"))
+        self._regions = self._config.demand.regions
+        self._metro_homes = arena_home_regions(N_METRO_HOMES, n_regions=len(self._regions))
+        self._episode_ticks = episode_ticks
+        self._reward_scale = reward_scale
+        self._marketing_bonus = reward in ("marketing", "balanced")
+        self._balanced = reward == "balanced"
+        self._obs_scale = obs_scale
+        native = build_action_space()
+        self.action_space = bounded_logit_space(native) if bound_logits else native
+        self.observation_space = build_observation_space(self._config)
+        # Checkpoints load once per env copy; distinct labels keep a repeated zip in its own seat.
+        specs = {f"opp{i}": str(path) for i, path in enumerate(opponents, start=1)}
+        self._opponents = list(
+            _materialize_predicts(specs, action_space=native, config=self._config).values()
+        )
+
+    def reset(
+        self, *, seed: int | None = None, options: dict[str, Any] | None = None
+    ) -> tuple[npt.NDArray[np.float32], dict[str, Any]]:
+        super().reset(seed=seed)
+        homes = tuple(int(h) for h in self.np_random.permutation(self._metro_homes)[:N_SEATS])
+        world_seed = int(self.np_random.integers(0, 2**31 - 1))
+        self._world = RetailParallelEnv(
+            self._config,
+            n_learning_agents=N_SEATS,
+            home_regions=homes,
+            seed=world_seed,
+            mask_expansion_seats=tuple(range(N_SEATS)),
+        )
+        self._agents = self._world.possible_agents
+        self._obs, _ = self._world.reset(seed=world_seed)
+        self._tick = 0
+        return self._learner_obs(), {"homes": homes, "world_seed": world_seed}
+
+    def step(
+        self, action: npt.NDArray[np.float32]
+    ) -> tuple[npt.NDArray[np.float32], float, bool, bool, dict[str, Any]]:
+        actions = {self._agents[LEARNER_SEAT]: np.asarray(action, dtype=np.float32)}
+        for seat, npc in enumerate(self._opponents, start=1):
+            agent = self._agents[seat]
+            actions[agent] = np.asarray(
+                npc(self._obs[agent], episode_start=self._tick == 0), dtype=np.float32
+            ).ravel()
+        self._obs, rewards, _, _, _ = self._world.step(actions)
+        self._tick += 1
+        reward = float(rewards[self._agents[LEARNER_SEAT]])
+        if self._marketing_bonus:
+            # Profit plus a bonus for brand awareness held in the regions the seat has stores in.
+            seat = self._world._state.retailers[LEARNER_SEAT]
+            awareness = np.asarray(seat.awareness_per_region, dtype=np.float64)
+            present = np.asarray(seat.stores_per_region) > 0
+            reward += MARKETING_BONUS * (float(awareness[present].mean()) if present.any() else 0.0)
+        if self._balanced:
+            seat = self._world._state.retailers[LEARNER_SEAT]
+            reward += HAPPINESS_BONUS * float(seat.employee_happiness)
+            reward += COVERAGE_BONUS * self._levers_in_use(action)
+        reward *= self._reward_scale
+        return self._learner_obs(), reward, False, self._tick >= self._episode_ticks, {}
+
+    def _levers_in_use(self, action: npt.NDArray[np.float32]) -> int:
+        """How many continuous levers the action keeps inside the 5 to 95 percent band of their range."""
+        levers = decode_action(np.asarray(action, dtype=np.float32)).levers
+        count = 0
+        for spec in LEVER_REGISTRY:
+            if spec.name in CONTINUOUS_LEVERS and spec.name in levers:
+                fraction = (float(levers[spec.name]) - spec.low) / (spec.high - spec.low)
+                count += COVERAGE_BAND[0] <= fraction <= COVERAGE_BAND[1]
+        return count
+
+    def _learner_obs(self) -> npt.NDArray[np.float32]:
+        obs = self._obs[self._agents[LEARNER_SEAT]]
+        return obs if self._obs_scale is None else (obs / self._obs_scale).astype(np.float32)
+
+
+def estimate_obs_scale(seed: int, opponents: Sequence[str | Path]) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
+    """Per-dim scale (peak |obs| over a random-action rollout, floored at 1) and sample obs.
+
+    Raw observations are far from unit scale (cash is 15,000 at the start), which a freshly
+    initialised network handles badly. A random policy's peaks sit well below a good policy's
+    (cash ~3.5e4 against 4.5e5 to 1.3e6 for the strongest NPCs), so trained play will exceed
+    this scale; it only has to be roughly right.
+    """
+    env = NpcFieldEnv(seed, opponents, bound_logits=True)
+    env.action_space.seed(seed)
+    obs, _ = env.reset()
+    peak, samples = np.abs(obs), [obs]
+    for tick in range(OBS_SCALE_WARMUP_TICKS):
+        obs, _, _, truncated, _ = env.step(env.action_space.sample())
+        peak = np.maximum(peak, np.abs(obs))
+        if tick % 100 == 0:
+            samples.append(obs)
+        if truncated:
+            obs, _ = env.reset()
+    return np.maximum(peak, 1.0).astype(np.float32), np.stack(samples)
+
+
+def fold_obs_scale(model: SAC, obs_scale: npt.NDArray[np.float32]) -> None:
+    """Bake ``obs / obs_scale`` into the first Linear layer of the actor and critics, in place.
+
+    The saved zip then takes RAW observations, as the scorer feeds them. A critic's input is
+    (obs, action), so only its first ``len(obs_scale)`` columns are scaled.
+    """
+    inv = torch.as_tensor(1.0 / obs_scale, dtype=torch.float32)
+    policy = model.policy
+    critics = [*policy.critic.q_networks, *policy.critic_target.q_networks]
+    with torch.no_grad():
+        for first in [policy.actor.latent_pi[0], *(net[0] for net in critics)]:
+            first.weight[:, : len(inv)] *= inv
+
+
+def network_outputs(model: SAC, obs: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
+    """Actor action plus both critics' and both target critics' Q-values, for drift checks."""
+    obs_t = torch.as_tensor(obs, dtype=torch.float32)
+    with torch.no_grad():
+        action = model.policy.actor(obs_t, deterministic=True)
+        q_values = [*model.policy.critic(obs_t, action), *model.policy.critic_target(obs_t, action)]
+    return torch.cat([action, *q_values], dim=1).numpy()
+
+
+def make_env_fns(args: argparse.Namespace, **env_kwargs: Any) -> list[Callable[[], gym.Env]]:
+    """One factory per env copy, each with its own seed (cloning one env would repeat worlds)."""
+    seeds = [
+        int(s.generate_state(1)[0]) for s in np.random.SeedSequence(args.seed).spawn(args.n_envs)
+    ]
+    return [
+        lambda s=s: Monitor(
+            NpcFieldEnv(
+                s,
+                args.opponents,
+                episode_ticks=args.episode_ticks,
+                bound_logits=args.bound_logits,
+                reward=args.reward,
+                **env_kwargs,
+            )
+        )
+        for s in seeds
+    ]
+
+
+def build_model(args: argparse.Namespace, venv: VecEnv) -> Any:
+    if args.init is not None:
+        # Continue training an existing checkpoint (its type must match --algo).
+        if args.algo == "recurrent_ppo":
+            from sb3_contrib import RecurrentPPO
+
+            return RecurrentPPO.load(args.init, env=venv, verbose=1)
+        if args.algo == "sac":
+            return SAC.load(
+                args.init, env=venv, buffer_size=min(args.steps, 1_000_000), gradient_steps=-1, verbose=1
+            )
+        return {"ppo": PPO, "a2c": A2C}[args.algo].load(args.init, env=venv, verbose=1)
+    if args.algo == "ppo":
+        return PPO("MlpPolicy", venv, verbose=1)
+    if args.algo == "a2c":
+        return A2C("MlpPolicy", venv, ent_coef=args.ent_coef, verbose=1)
+    if args.algo == "recurrent_ppo":
+        from sb3_contrib import RecurrentPPO
+
+        return RecurrentPPO("MlpLstmPolicy", venv, verbose=1)
+    # gradient_steps=-1: one gradient step per env step, however many envs. The default 1e6
+    # buffer is far larger than a short run needs.
+    return SAC(
+        "MlpPolicy", venv, buffer_size=min(args.steps, 1_000_000), gradient_steps=-1, verbose=1
+    )
+
+
+def train(args: argparse.Namespace) -> Any:
+    set_random_seed(args.seed)
+    obs_scale = samples = None
+    env_kwargs: dict[str, Any] = {}
+    if args.algo == "sac":
+        obs_scale, samples = estimate_obs_scale(args.seed, args.opponents)
+        env_kwargs = {"reward_scale": SAC_REWARD_SCALE, "obs_scale": obs_scale}
+    venv: VecEnv = DummyVecEnv(make_env_fns(args, **env_kwargs))
+    if args.algo != "sac":
+        venv = VecNormalize(venv, norm_obs=False, norm_reward=True)
+    # SB3 does not seed the action space; SAC's random warm-up actions are drawn from it.
+    venv.action_space.seed(args.seed)
+    model = build_model(args, venv)
+    if args.init is not None and obs_scale is not None:
+        # A saved SAC zip takes RAW observations; training feeds obs / scale, so undo the fold.
+        fold_obs_scale(model, 1.0 / obs_scale)
+    model.learn(total_timesteps=args.steps)
+    if obs_scale is not None:
+        before = network_outputs(model, samples / obs_scale)
+        fold_obs_scale(model, obs_scale)
+        after = network_outputs(model, samples)
+        drift = float(np.max(np.abs(before - after) / np.maximum(1.0, np.abs(before))))
+        if drift > 1e-5:
+            raise RuntimeError(f"folding the obs scale changed predictions by {drift:.2e}")
+        print(f"obs scale folded into the network (max prediction drift {drift:.1e})")
+    return model
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Train one arena entry against five frozen checkpoints.")
+    parser.add_argument("label", help="run name; names the default --out")
+    parser.add_argument(
+        "--opponents",
+        type=Path,
+        nargs=N_OPPONENTS,
+        required=True,
+        metavar="CKPT",
+        help="five checkpoint zips for seats 1-5 (frozen; the learner is trained from scratch)",
+    )
+    parser.add_argument(
+        "--init",
+        type=Path,
+        help="checkpoint zip to continue training as the learner (default: a fresh network); "
+        "--algo must match its type",
+    )
+    parser.add_argument("--algo", choices=("ppo", "a2c", "recurrent_ppo", "sac"), default="ppo")
+    parser.add_argument(
+        "--reward",
+        choices=("profit", "weighted", "marketing", "balanced"),
+        default="profit",
+        help="training reward: profit only; the weighted blend (profit 0.5, revenue 0.2, "
+        "market share 0.2, loyalty 0.1); or marketing (profit + 100 x mean awareness in the "
+        "regions the seat has stores in); or balanced (marketing, plus 300 x staff happiness, plus 30 "
+        "per continuous lever kept inside 5-95%% of its range)",
+    )
+    parser.add_argument(
+        "--steps",
+        type=int,
+        default=300_000,
+        help="env steps summed over copies. On-policy algos round up to whole rollouts: PPO 2048 "
+        "steps per copy, RecurrentPPO 128 (--steps 300000 --n-envs 3 trains 301,056 / 300,288)",
+    )
+    parser.add_argument(
+        "--ent-coef", type=float, default=0.0, help="A2C entropy bonus (keeps actions varied)"
+    )
+    parser.add_argument(
+        "--n-envs",
+        type=int,
+        default=4,
+        help="copies step in turn in one process (DummyVecEnv), so more copies use no more cores",
+    )
+    parser.add_argument(
+        "--seed", type=int, default=0, help="root seed for SB3, SAC's warm-up and each env copy"
+    )
+    parser.add_argument(
+        "--episode-ticks", type=int, default=1000, help="episode length; the wrapper truncates here"
+    )
+    parser.add_argument("--out", type=Path, help="zip path (default: runs/<label>.zip)")
+    parser.add_argument(
+        "--bound-logits",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="SAC only (on by default): bound the argmax logit dims to [-1, 1]; "
+        "rejected for ppo and recurrent_ppo, whose clipped samples would bias argmax",
+    )
+    args = parser.parse_args(argv)
+    missing = [str(p) for p in args.opponents if not p.is_file()]
+    if missing:
+        parser.error(f"opponent checkpoint(s) not found: {', '.join(missing)}")
+    if args.init is not None and not args.init.is_file():
+        parser.error(f"--init checkpoint not found: {args.init}")
+    if args.bound_logits is not None and args.algo != "sac":
+        parser.error(f"--bound-logits / --no-bound-logits is SAC only, not for --algo {args.algo}")
+    if args.bound_logits is None:
+        args.bound_logits = args.algo == "sac"
+    args.out = args.out or Path("runs") / f"{args.label}.zip"
+    return args
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    model = train(args)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    model.save(args.out)
+    print(f"saved {args.out}")
+    # Sidecar read by scripts/arena_replay.py to label what this checkpoint was trained on.
+    meta = {"algo": args.algo, "reward": args.reward, "steps": args.steps, "seed": args.seed, "ent_coef": args.ent_coef,
+            "init": str(args.init) if args.init else None,
+            "opponents": [str(p) for p in args.opponents]}
+    args.out.with_suffix(".json").write_text(json.dumps(meta) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
