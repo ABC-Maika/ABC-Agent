@@ -58,8 +58,13 @@ def collect(args: argparse.Namespace) -> None:
     pool = [name for name in league.OPPONENTS if name != args.teacher] + [SCRIPTED_FILL]
     obs_rows, act_rows, ep_profit, ep_rank = [], [], [], []
     for episode in range(args.episodes):
+        # Cover every home: episode k starts from rotation (shift0 + k) of the six METRO homes.
+        base = (1, 5, 9, 13, 17, 21)
+        shift = (args.shift0 + episode) % 6
+        homes = tuple(base[(i + shift) % 6] for i in range(6))
         env = league.LeagueEnv(
-            args.seed + episode, obs_scale, (0.3, 0.3, 0.3, 0.1), 0.0, 0.0, 0, pool=pool
+            args.seed + episode, obs_scale, (0.3, 0.3, 0.3, 0.1), 0.0, 0.0, 0, pool=pool,
+            fixed_homes=homes if args.rotate else None,
         )
         teacher = _materialize_predicts(
             {args.teacher: teacher_path}, action_space=build_action_space(), config=env.config
@@ -95,7 +100,9 @@ def collect(args: argparse.Namespace) -> None:
 
 def behaviour_clone(args: argparse.Namespace) -> None:
     # Drop the teachers' flawed episodes and lift the wage target (see ``load_demos``).
-    obs, act = load_demos(args.data, args.max_rank, args.wage_floor, args.expand_boost)
+    obs, act = load_demos(
+        args.data, args.max_rank, args.wage_floor, args.expand_boost, args.early_wage, args.frugal_opening
+    )
     # With a research cap the saved action space carries the lower bound, and targets above it are
     # clipped to it (the scaled target is clipped to [-1, 1]).
     if args.new_net:
@@ -132,13 +139,29 @@ def behaviour_clone(args: argparse.Namespace) -> None:
     optimizer = torch.optim.Adam(params, lr=args.lr)
     rng = np.random.default_rng(0)
     n = len(inputs)
+    exp_slot = next(sl for sl in flatten_action_space_layout().levers if sl.spec.name == "expansion")
+    exp_lo, exp_hi = exp_slot.offset, exp_slot.offset + exp_slot.width
     for epoch in range(args.epochs):
         order = rng.permutation(n)
         total = 0.0
         for start in range(0, n, args.batch_size):
             batch = order[start : start + args.batch_size]
             mean, _, _ = actor.get_action_dist_params(inputs[batch])
-            loss = torch.nn.functional.mse_loss(torch.tanh(mean), target[batch])
+            pred = torch.tanh(mean)
+            if args.expansion_ce:
+                # The expansion choice is one of 32 (hold + regions): a regression to averaged one-hot
+                # targets collapsed it to the same regions in every home (2, 6 whatever the home), so
+                # that block is fit as a classification instead.
+                rest = torch.ones(pred.shape[1], dtype=torch.bool)
+                rest[exp_lo:exp_hi] = False
+                loss = torch.nn.functional.mse_loss(pred[:, rest], target[batch][:, rest]) + (
+                    args.expansion_ce
+                    * torch.nn.functional.cross_entropy(
+                        pred[:, exp_lo:exp_hi] * 6.0, target[batch][:, exp_lo:exp_hi].argmax(1)
+                    )
+                )
+            else:
+                loss = torch.nn.functional.mse_loss(pred, target[batch])
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -164,6 +187,8 @@ def main() -> int:
     c.add_argument("teacher", choices=("orcho", "krischo-v8", "krischo", "kmlp6", "kmlp8"))
     c.add_argument("--episodes", type=int, default=10)
     c.add_argument("--seed", type=int, default=100)
+    c.add_argument("--rotate", action="store_true", help="cycle the six home rotations")
+    c.add_argument("--shift0", type=int, default=0)
     c.add_argument("--scale", type=Path, default=scale)
     c.add_argument("--out", type=Path, required=True)
     b = sub.add_parser("bc")
@@ -174,6 +199,9 @@ def main() -> int:
     b.add_argument("--max-rank", type=int, default=0, help="keep teacher episodes ranked this or better")
     b.add_argument("--wage-floor", type=float, default=0.0)
     b.add_argument("--expand-boost", type=int, default=1, help="repeat expansion rows this many times")
+    b.add_argument("--early-wage", type=float, default=0.0)
+    b.add_argument("--expansion-ce", type=float, default=0.0, help="weight of the expansion classification loss")
+    b.add_argument("--frugal-opening", action="store_true")
     b.add_argument("--epochs", type=int, default=12)
     b.add_argument("--lr", type=float, default=1e-3)
     b.add_argument("--batch-size", type=int, default=256)

@@ -66,6 +66,7 @@ OPPONENTS: dict[str, str] = {  # the trained agents on main
     "jack": "agents/misho/jack/checkpoint.zip",
     "kmlp6": "agents/Krischo/mlp-v6/checkpoint.zip",
     "kmlp8": "agents/Krischo/mlp-v8/checkpoint.zip",
+    "orcho-v5": "agents/orcho/v5/checkpoint.zip",
     "yav-sac": "agents/Yavkata/sac/checkpoint.zip",
     # Hall of fame: a frozen copy of Jacky-T v1.1, so a new candidate cannot win by forgetting it.
     "jacky-v11": "runs/hof/jacky_v11.zip",
@@ -92,6 +93,63 @@ def capped_action_space(research_cap: float | None) -> spaces.Box:
     return spaces.Box(low=space.low, high=high, dtype=np.float32)
 
 
+MARGIN = 0.39  # profit / revenue before running costs, read from KMlp8's trace (rough)
+STORE_OPEX = 50.0  # per store per round
+CAPEX = 5_000.0
+BUFFER_CASH = 8_000.0  # after the opening, open a store only with this much cash and a profit
+OPENING_ROUNDS = 5
+MAX_LOW_REGIONS = 2  # LOYAL / FRONTIER stores held at most
+EXPECTED_RIVALS = {0: 0, 1: 3, 2: 1, 3: 0}  # region index % 4: FRONTIER, METRO, AFFLUENT, LOYAL
+
+
+def region_scores(config: Any, retailers: Any, learner: int, retaliate: float = 0.0) -> np.ndarray:
+    """Estimated profit per round of a new store of ``learner``'s in each region.
+
+    With equal levers the agents in a region split it evenly, and one agent alone is capped at 60%:
+    share = 0.6 alone, else 1 / (agents there + 1). Profit = demand * share * MARGIN - STORE_OPEX. A rival
+    that holds a store in one of my regions is an intruder; a region it is in gets ``retaliate`` times my
+    gross gain on top (that gain is exactly what the rivals there lose). Region 0 is never playable.
+    """
+    demand = np.array([r.base_regional_demand for r in config.demand.regions], dtype=float)
+    presence = [np.asarray(r.stores_per_region) > 0 for r in retailers]
+    mine = presence[learner]
+    rivals = sum(p.astype(int) for k, p in enumerate(presence) if k != learner)
+    intruders = [k for k, p in enumerate(presence) if k != learner and (p & mine).any()]
+    # Crowds grow: by round ~40 every agent is in every METRO (3 others), about one in each AFFLUENT,
+    # almost none in LOYAL / FRONTIER (seen in the battle replays), so score against the expected crowd.
+    expected = np.array([EXPECTED_RIVALS[i % 4] for i in range(len(demand))])
+    rivals = np.maximum(rivals, expected)
+    share = np.where(rivals == 0, 0.6, 1.0 / (rivals + 1))
+    gain = demand * share * MARGIN
+    scores = gain - STORE_OPEX
+    if retaliate and intruders:
+        hit = np.zeros(len(demand), dtype=bool)
+        for k in intruders:
+            hit |= presence[k]
+        scores = scores + retaliate * gain * hit
+    scores[0] = -np.inf
+    return scores
+
+
+def may_open(retailer: Any, region_scores_row: np.ndarray, tick: int) -> np.ndarray:
+    """Regions the cash-buffer rule allows opening (all of them during the opening rounds).
+
+    After ``OPENING_ROUNDS`` a store needs cash >= BUFFER_CASH and a positive last profit (session 10
+    expanded to 15 stores on a 5,000 gate alone, ran out of cash and was cut back to 3), and at most
+    ``MAX_LOW_REGIONS`` LOYAL / FRONTIER stores may be held (they pay least per store).
+    """
+    n = len(region_scores_row)
+    if tick < OPENING_ROUNDS:
+        return np.ones(n, dtype=bool)
+    if retailer.cash < BUFFER_CASH or retailer.last_profit <= 0:
+        return np.zeros(n, dtype=bool)
+    stores = np.asarray(retailer.stores_per_region) > 0
+    low = np.array([(i % 4) in (0, 3) for i in range(n)])
+    if int((stores & low).sum()) >= MAX_LOW_REGIONS:
+        return ~low
+    return np.ones(n, dtype=bool)
+
+
 class LeagueEnv(gym.Env):
     """Jacky-T against the five trained agents, with rank-based reward shaping."""
 
@@ -114,6 +172,14 @@ class LeagueEnv(gym.Env):
         happy_penalty: float = 0.0,
         research_pulse: bool = False,
         open_value: bool = False,
+        debt_penalty: float = 0.0,
+        opening_bonus: float = 0.0,
+        open_early_mult: float = 1.0,
+        fixed_homes: Sequence[int] | None = None,
+        crowd_rule: int = 0,
+        owner_rule: bool = False,
+        score_rule: bool = False,
+        retaliate: float = 0.0,
         research_cap: float | None = None,
         raw_profit_scale: float | None = None,
         lead_shaping: float = 0.0,
@@ -140,6 +206,14 @@ class LeagueEnv(gym.Env):
         self.happy_penalty = happy_penalty
         self.research_pulse = research_pulse
         self.open_value = open_value
+        self.debt_penalty = debt_penalty
+        self.opening_bonus = opening_bonus
+        self.crowd_rule = crowd_rule
+        self.owner_rule = owner_rule
+        self.score_rule = score_rule
+        self.retaliate = retaliate
+        self.fixed_homes = tuple(fixed_homes) if fixed_homes is not None else None
+        self.open_early_mult = open_early_mult
         self._owned = np.zeros(0, dtype=bool)
         self._research_at = next(
             s.offset for s in flatten_action_space_layout().levers if s.spec.name == "research"
@@ -210,6 +284,8 @@ class LeagueEnv(gym.Env):
             n_regions = len(self.config.demand.regions)
             drawn = self.np_random.choice(np.arange(1, n_regions), size=N_SEATS, replace=False)
             homes = tuple(int(h) for h in drawn)
+        elif self.fixed_homes is not None:
+            homes = self.fixed_homes
         else:
             homes = tuple(int(h) for h in self.np_random.permutation(self.homes))
         names = rng.sample(self.pool, EPISODE_OPPONENTS)
@@ -267,9 +343,90 @@ class LeagueEnv(gym.Env):
                 )
                 gained = mine & ~self._owned
                 reward += self.open_bonus * float((demand / (1 + rivals) / 700.0)[gained].sum())
+            elif self.score_rule:
+                # One score for every region (see ``region_scores``): the bonus is the score of the
+                # region opened relative to the best one that was still open to me, so the best region
+                # pays the full bonus and a poorer one proportionally less (negative if it loses money).
+                scores = region_scores(self.config, retailers, LEARNER, self.retaliate)
+                gained = mine & ~self._owned
+                candidates = ~self._owned
+                candidates[0] = False
+                best = float(scores[candidates].max()) if candidates.any() else 0.0
+                mult = self.open_early_mult if self.t <= 10 else 1.0
+                if best > 0 and gained.any():
+                    rel = np.clip(scores[gained] / best, -1.0, 1.0)
+                    # The cash-buffer rule is judged on the state before the purchase (cash + capex).
+                    me = retailers[LEARNER]
+                    before = self._buffer_view(me, int(gained.sum()))
+                    allowed = may_open(before, scores, self.t - 1)
+                    rel = np.where(allowed[gained], rel, -0.5)
+                    reward += self.open_bonus * mult * float(rel.sum())
+            elif self.owner_rule:
+                # Owner rule: open the highest-class region nobody else owns; once no region of that
+                # class is free, the next class down, and so on. Reward = base * demand / demand of the
+                # best free region (so a free AFFLUENT scores 0.64 while a free METRO exists); a region a
+                # rival already owns is penalised while any free region is left, otherwise it pays
+                # demand / (rivals + 1).
+                demand = np.array([r.base_regional_demand for r in self.config.demand.regions])
+                rivals = sum(
+                    (np.asarray(retailers[k].stores_per_region) > 0).astype(int)
+                    for k in range(N_SEATS)
+                    if k != LEARNER
+                )
+                gained = mine & ~self._owned
+                free = (rivals == 0) & ~(self._owned) & (np.arange(len(demand)) >= 1)
+                best = float(demand[free].max()) if free.any() else 0.0
+                mult = self.open_early_mult if self.t <= 10 else 1.0
+                total = 0.0
+                for r in np.flatnonzero(gained):
+                    if rivals[r] == 0 and best > 0:
+                        total += demand[r] / best
+                    elif best > 0:
+                        total -= 1.0
+                    else:
+                        total += demand[r] / 1400.0 / (1 + rivals[r])
+                reward += self.open_bonus * mult * total
+            elif self.crowd_rule:
+                # Crowd rule: open a region only while at most ``crowd_rule`` rivals are already in it;
+                # a more crowded region (a METRO with 3+ owners) is penalised, so the policy goes to
+                # the next class down (AFFLUENT, then LOYAL, then FRONTIER). The reward is scaled by the
+                # region's demand (METRO 1.0, AFFLUENT 0.64, LOYAL 0.43, FRONTIER 0.25).
+                demand = np.array([r.base_regional_demand for r in self.config.demand.regions])
+                rivals = sum(
+                    (np.asarray(retailers[k].stores_per_region) > 0).astype(int)
+                    for k in range(N_SEATS)
+                    if k != LEARNER
+                )
+                gained = mine & ~self._owned
+                sign = np.where(rivals <= self.crowd_rule, 1.0, -1.0)
+                mult = self.open_early_mult if self.t <= 10 else 1.0
+                reward += self.open_bonus * mult * float((sign * demand / 1400.0)[gained].sum())
             else:
-                reward += self.open_bonus * int((mine & ~self._owned).sum())
+                mult = self.open_early_mult if self.t <= 10 else 1.0
+                reward += self.open_bonus * mult * int((mine & ~self._owned).sum())
+            if self.retaliate and not self.score_rule:
+                # Retaliation: a rival is an intruder when it holds a store in one of my regions. Opening
+                # in a region the intruder is in pulls D / (agents there + 1) of that region's demand
+                # away from the rivals there (zero-sum split), at the price of the store's running cost
+                # (~50 a round). The bonus pays the surplus, so I go where the intruder loses more than
+                # the store costs me.
+                demand = np.array([r.base_regional_demand for r in self.config.demand.regions])
+                presence = [np.asarray(retailers[k].stores_per_region) > 0 for k in range(N_SEATS)]
+                intruders = [k for k in range(N_SEATS) if k != LEARNER and (presence[k] & self._owned).any()]
+                rivals_n = sum(presence[k].astype(int) for k in range(N_SEATS) if k != LEARNER)
+                for r in np.flatnonzero(mine & ~self._owned):
+                    if any(presence[k][r] for k in intruders):
+                        reward += self.retaliate * max(0.0, demand[r] / (1 + rivals_n[r]) - 50.0) / 700.0
             self._owned = self._owned | mine
+        if self.opening_bonus and self.t == 4:
+            reward += self.opening_bonus * float(
+                int(np.sum(self.world._state.retailers[LEARNER].stores_per_region)) >= 4
+            )
+        if self.debt_penalty:
+            # The world closes all but 3 stores once cash stays below -10,000 for 50 rounds; start
+            # pushing back at -5,000 (cash guard).
+            cash = float(self.world._state.retailers[LEARNER].cash)
+            reward -= self.debt_penalty * max(0.0, -5000.0 - cash) / 5000.0
         if self.happy_penalty:
             # Unpaid staff (happiness near 0) trigger the write-off penalty; RL drove wages to ~0.02.
             happy = float(self.world._state.retailers[LEARNER].employee_happiness)
@@ -279,6 +436,17 @@ class LeagueEnv(gym.Env):
             reward += self.prime_weight * float(shares @ self._prime_w)
         rank = int((self.cum > self.cum[LEARNER]).sum()) + 1
         return self._learner_obs(), reward, False, self.t >= self.ticks, {"rank": rank}
+
+    @staticmethod
+    def _buffer_view(me: Any, n_new: int) -> Any:
+        """The learner's retailer as it was before opening ``n_new`` stores this round."""
+        from types import SimpleNamespace
+
+        before = list(me.stores_per_region)
+        return SimpleNamespace(
+            cash=float(me.cash) + CAPEX * n_new, last_profit=float(me.last_profit),
+            stores_per_region=tuple(before),
+        )
 
     def _with_research(self, action: np.ndarray) -> np.ndarray:
         action = np.array(action, dtype=np.float32)
@@ -334,6 +502,13 @@ def make_one(seed: int, obs_scale: np.ndarray, args: argparse.Namespace) -> Moni
             happy_penalty=args.happy_penalty,
             research_pulse=args.research_pulse,
             open_value=args.open_value,
+            debt_penalty=args.debt_penalty,
+            opening_bonus=args.opening_bonus,
+            crowd_rule=args.crowd_rule,
+            owner_rule=args.owner_rule,
+            score_rule=args.score_rule,
+            retaliate=args.retaliate,
+            open_early_mult=args.open_early_mult,
             research_cap=args.research_cap,
             raw_profit_scale=args.raw_profit_scale,
             lead_shaping=args.lead_shaping,
@@ -367,7 +542,9 @@ def train(args: argparse.Namespace) -> TQC:
     )
     if args.anchor_data:
         demo_obs, demo_act = load_demos(
-            args.anchor_data, args.anchor_max_rank, args.anchor_wage_floor, args.expand_boost
+            args.anchor_data, args.anchor_max_rank, args.anchor_wage_floor, args.expand_boost,
+            args.anchor_early_wage,
+            args.frugal_opening,
         )
         model.set_demos(demo_obs, demo_act, args.anchor_alpha)
         print(f"anchoring the actor to {len(demo_obs)} teacher samples (alpha {args.anchor_alpha})")
@@ -497,6 +674,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--happy-penalty", type=float, default=0.0)
     parser.add_argument("--research-pulse", action="store_true")
     parser.add_argument("--open-value", action="store_true")
+    parser.add_argument("--anchor-early-wage", type=float, default=0.0)
+    parser.add_argument("--debt-penalty", type=float, default=0.0)
+    parser.add_argument("--frugal-opening", action="store_true")
+    parser.add_argument("--retaliate", type=float, default=0.0, help="bonus for opening where an intruder is")
+    parser.add_argument("--score-rule", action="store_true", help="one profit score ranks all regions")
+    parser.add_argument("--owner-rule", action="store_true", help="open the highest-class unowned region")
+    parser.add_argument("--crowd-rule", type=int, default=0, help="max rivals already in a region to open it")
+    parser.add_argument("--opening-bonus", type=float, default=0.0)
+    parser.add_argument("--open-early-mult", type=float, default=1.0)
     parser.add_argument(
         "--pool", nargs="+", default=None, help="opponent names to draw from (default: the full league)"
     )
@@ -531,6 +717,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     model = train(args)
     args.out.parent.mkdir(parents=True, exist_ok=True)
+    jacky.stock_schedule(model)
     model.save(args.out)
     print(f"saved {args.out}")
     return 0

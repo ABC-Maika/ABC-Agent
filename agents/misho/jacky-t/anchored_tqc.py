@@ -28,7 +28,9 @@ from retail_simulator.core.encoding import flatten_action_space_layout
 
 
 def load_demos(
-    paths: Sequence[Path], max_rank: int = 0, wage_floor: float = 0.0, expand_boost: int = 1
+    paths: Sequence[Path], max_rank: int = 0, wage_floor: float = 0.0, expand_boost: int = 1,
+    early_wage: float = 0.0,
+    frugal_opening: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Teacher recordings from ``mimic.py collect``, with the teachers' flawed episodes removed.
 
@@ -55,6 +57,19 @@ def load_demos(
                 # gate (the demos are whole 1,000-round episodes, so the row index gives the round).
                 late = (np.arange(len(act)) % 1000) >= 5
                 act[late, slot.offset] = np.maximum(act[late, slot.offset], wage_floor)
+                if early_wage:
+                    # Rounds 3-20: the strongest teacher (KMlp8) pays ~0.9 straight after its third
+                    # store; Jerky paid 0.1-0.3, happiness fell to 0.2-0.5 and revenue per store with it.
+                    tick = np.arange(len(act)) % 1000
+                    early = (tick >= 3) & (tick < 20)
+                    act[early, slot.offset] = np.maximum(act[early, slot.offset], early_wage)
+    if frugal_opening:
+        # Rounds 1-3: no wage and no research, so cash stays above the 5,000 store gate at round 3
+        # (a miss by ~100 cash cost Jerky its 4th store in home 1).
+        first = (np.arange(len(act)) % 1000) < 3
+        for slot in flatten_action_space_layout().levers:
+            if slot.spec.name in ("wage_spend", "research"):
+                act[first, slot.offset] = 0.0
     if expand_boost > 1:
         for slot in flatten_action_space_layout().levers:
             if slot.spec.name == "expansion":

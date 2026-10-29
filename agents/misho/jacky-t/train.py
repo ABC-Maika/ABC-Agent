@@ -168,10 +168,23 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def stock_schedule(model: TQC) -> None:
+    """Make the saved learning-rate schedule a stock SB3 object.
+
+    ``--from-actor`` runs left ``lr_schedule`` as a ``constant_fn`` closure, which the zip stores by value
+    (cloudpickle). Battle rooms reject such checkpoints: "carries custom code ... accept only stock
+    checkpoints". The scorer never reads the schedule, so a stock ``FloatSchedule`` replaces it.
+    """
+    from stable_baselines3.common.utils import FloatSchedule
+
+    model.lr_schedule = FloatSchedule(float(model.learning_rate) if not callable(model.learning_rate) else 3e-4)
+
+
 def finalize(snapshot: Path, out: Path) -> None:
     """Fold the obs scale saved beside a periodic snapshot into it and save a scorable zip."""
     model = TQC.load(snapshot, device="cpu")
     fold_obs_scale(model, np.load(snapshot.parent / "obs_scale.npy"))
+    stock_schedule(model)
     out.parent.mkdir(parents=True, exist_ok=True)
     model.save(out)
     print(f"folded {snapshot} -> {out}")
@@ -183,6 +196,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         finalize(args.finalize, args.out)
         return 0
     model = train(args)
+    stock_schedule(model)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     model.save(args.out)
     print(f"saved {args.out}")
