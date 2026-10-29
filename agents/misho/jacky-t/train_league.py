@@ -114,6 +114,11 @@ class LeagueEnv(gym.Env):
         happy_penalty: float = 0.0,
         research_pulse: bool = False,
         open_value: bool = False,
+        debt_penalty: float = 0.0,
+        opening_bonus: float = 0.0,
+        open_early_mult: float = 1.0,
+        fixed_homes: Sequence[int] | None = None,
+        crowd_rule: int = 0,
         research_cap: float | None = None,
         raw_profit_scale: float | None = None,
         lead_shaping: float = 0.0,
@@ -140,6 +145,11 @@ class LeagueEnv(gym.Env):
         self.happy_penalty = happy_penalty
         self.research_pulse = research_pulse
         self.open_value = open_value
+        self.debt_penalty = debt_penalty
+        self.opening_bonus = opening_bonus
+        self.crowd_rule = crowd_rule
+        self.fixed_homes = tuple(fixed_homes) if fixed_homes is not None else None
+        self.open_early_mult = open_early_mult
         self._owned = np.zeros(0, dtype=bool)
         self._research_at = next(
             s.offset for s in flatten_action_space_layout().levers if s.spec.name == "research"
@@ -210,6 +220,8 @@ class LeagueEnv(gym.Env):
             n_regions = len(self.config.demand.regions)
             drawn = self.np_random.choice(np.arange(1, n_regions), size=N_SEATS, replace=False)
             homes = tuple(int(h) for h in drawn)
+        elif self.fixed_homes is not None:
+            homes = self.fixed_homes
         else:
             homes = tuple(int(h) for h in self.np_random.permutation(self.homes))
         names = rng.sample(self.pool, EPISODE_OPPONENTS)
@@ -267,9 +279,34 @@ class LeagueEnv(gym.Env):
                 )
                 gained = mine & ~self._owned
                 reward += self.open_bonus * float((demand / (1 + rivals) / 700.0)[gained].sum())
+            elif self.crowd_rule:
+                # Crowd rule: open a region only while at most ``crowd_rule`` rivals are already in it;
+                # a more crowded region (a METRO with 3+ owners) is penalised, so the policy goes to
+                # the next class down (AFFLUENT, then LOYAL, then FRONTIER). The reward is scaled by the
+                # region's demand (METRO 1.0, AFFLUENT 0.64, LOYAL 0.43, FRONTIER 0.25).
+                demand = np.array([r.base_regional_demand for r in self.config.demand.regions])
+                rivals = sum(
+                    (np.asarray(retailers[k].stores_per_region) > 0).astype(int)
+                    for k in range(N_SEATS)
+                    if k != LEARNER
+                )
+                gained = mine & ~self._owned
+                sign = np.where(rivals <= self.crowd_rule, 1.0, -1.0)
+                mult = self.open_early_mult if self.t <= 10 else 1.0
+                reward += self.open_bonus * mult * float((sign * demand / 1400.0)[gained].sum())
             else:
-                reward += self.open_bonus * int((mine & ~self._owned).sum())
+                mult = self.open_early_mult if self.t <= 10 else 1.0
+                reward += self.open_bonus * mult * int((mine & ~self._owned).sum())
             self._owned = self._owned | mine
+        if self.opening_bonus and self.t == 4:
+            reward += self.opening_bonus * float(
+                int(np.sum(self.world._state.retailers[LEARNER].stores_per_region)) >= 4
+            )
+        if self.debt_penalty:
+            # The world closes all but 3 stores once cash stays below -10,000 for 50 rounds; start
+            # pushing back at -5,000 (cash guard).
+            cash = float(self.world._state.retailers[LEARNER].cash)
+            reward -= self.debt_penalty * max(0.0, -5000.0 - cash) / 5000.0
         if self.happy_penalty:
             # Unpaid staff (happiness near 0) trigger the write-off penalty; RL drove wages to ~0.02.
             happy = float(self.world._state.retailers[LEARNER].employee_happiness)
@@ -334,6 +371,10 @@ def make_one(seed: int, obs_scale: np.ndarray, args: argparse.Namespace) -> Moni
             happy_penalty=args.happy_penalty,
             research_pulse=args.research_pulse,
             open_value=args.open_value,
+            debt_penalty=args.debt_penalty,
+            opening_bonus=args.opening_bonus,
+            crowd_rule=args.crowd_rule,
+            open_early_mult=args.open_early_mult,
             research_cap=args.research_cap,
             raw_profit_scale=args.raw_profit_scale,
             lead_shaping=args.lead_shaping,
@@ -367,7 +408,9 @@ def train(args: argparse.Namespace) -> TQC:
     )
     if args.anchor_data:
         demo_obs, demo_act = load_demos(
-            args.anchor_data, args.anchor_max_rank, args.anchor_wage_floor, args.expand_boost
+            args.anchor_data, args.anchor_max_rank, args.anchor_wage_floor, args.expand_boost,
+            args.anchor_early_wage,
+            args.frugal_opening,
         )
         model.set_demos(demo_obs, demo_act, args.anchor_alpha)
         print(f"anchoring the actor to {len(demo_obs)} teacher samples (alpha {args.anchor_alpha})")
@@ -497,6 +540,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--happy-penalty", type=float, default=0.0)
     parser.add_argument("--research-pulse", action="store_true")
     parser.add_argument("--open-value", action="store_true")
+    parser.add_argument("--anchor-early-wage", type=float, default=0.0)
+    parser.add_argument("--debt-penalty", type=float, default=0.0)
+    parser.add_argument("--frugal-opening", action="store_true")
+    parser.add_argument("--crowd-rule", type=int, default=0, help="max rivals already in a region to open it")
+    parser.add_argument("--opening-bonus", type=float, default=0.0)
+    parser.add_argument("--open-early-mult", type=float, default=1.0)
     parser.add_argument(
         "--pool", nargs="+", default=None, help="opponent names to draw from (default: the full league)"
     )
