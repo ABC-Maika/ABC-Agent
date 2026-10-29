@@ -1,0 +1,8 @@
+{
+  "team": "TODO: team name",
+  "agent_name": "orcho-v5",
+  "policy_kind": "a2c-mlp",
+  "contact": "TODO: contact",
+  "training_recipe": "scripts/league_finetune.py --algo a2c --steps 10000 --warmup 3000 (orcho-a2c v5 clone, league fine-tune)",
+  "sb3_version": "2.9.2"
+}
