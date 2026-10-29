@@ -1,13 +1,14 @@
 # jerky
 
 - **Owner:** misho. **Algorithm:** TQC (`MlpPolicy`, 512x512, sb3-contrib). Research lever capped at 0.4 (Box bound in the saved action space).
-- **Checkpoint on main:** session 4 (30k RL steps on top of a behaviour clone of KMlp8 / KMlp6 / Orcho), restored after later sessions (5 to 8) scored worse. It is a stock checkpoint (no function saved by value), so battle rooms accept it.
+- **Checkpoint on main:** session 9 (session 4 plus 10k RL steps with the owner rule: open the highest-class region nobody else owns), pushed on request. Session 4 (mean -87,863, 0 wins) scored a better mean; session 9 (mean -128,636, 2 wins) had more wins. The two are within noise. It is a stock checkpoint (no function saved by value), so battle rooms accept it.
 - **Recipe:** `mimic.py collect` the teachers in Jerky's seat, `mimic.py bc --new-net 512,512`, then 10k-step sessions of `runs/run_league.py` / `train_league.py` (anchored TQC, raw-profit reward, lead shaping, cash and happiness guards). `dagger.py` relabels Jerky's own states with a teacher's actions.
 
 ## Where it stands (12 fresh matches, seeds 5001 and 5002; Orcho, KMlp6, KMlp8, Krischo, YavSAC)
 | version | mean | wins | rank |
 |---|---|---|---|
-| session 4 (this) | -87,863 | 0 | 3.67 |
+| session 4 | -87,863 | 0 | 3.67 |
+| session 9 (this) | -128,636 | 2 | 3.50 |
 | session 7 | -124,317 | 0 | 3.83 |
 | session 8 | -222,179 | 0 | 5.17 |
 
