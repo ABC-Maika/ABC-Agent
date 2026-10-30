@@ -21,5 +21,19 @@ v5's plan made cheaper and more aggressive, then RL fine-tuned 10k steps (A2C).
 v7 beats Yavkata and jerky in every match of both tests. Slightly below v5 when it is the only v5-style agent
 (-0.27M), far stronger when other v5-style agents crowd the map (+2.46M).
 
+## Later local tests (the site's battle feature was removed; local simulator, same engine)
+
+12 games vs the newest agents (Krischo v11-rl and v13, Jerky lab-opt, Yavkata sac-v2, v6.2), 18 games in the light lineup:
+
+| RL steps | Light lineup (avg / worst) | Newest lineup (avg / place) |
+|---|---|---|
+| 5k | +25k / -232k | -120k / 3.92 |
+| **10k (this checkpoint)** | **+459k / +185k** | **-100k / 3.50** |
+| 50k | +136k / -237k | -139k / 3.42 |
+| 100k | +28k / -279k | -150k / 4.25 |
+
+More or fewer RL steps both hurt; do not retrain this checkpoint. A copy of its opening (Krischo v13, Jerky) shares its first regions, so
+in the newest lineup it loses (Yavkata sac-v2 wins 7 of 12 there).
+
 ## Limits
-Two site battles (12 matches); Krischo v11 not tested (not pushed yet). Losing matches still end near -120k to -200k.
+Two site battles (12 matches) plus the local tests above. Losing matches still end near -120k to -250k.
