@@ -38,6 +38,10 @@ DEFAULT = {
     "survive_exit": 0.0,    # leave once cash is back above this
     "survive_mkt": 0.0,
     "survive_pay": 1,       # 0: no smart-pay wage boost while surviving (pay the base wage only)
+    # v8 merge: v7's cheap service during the store race, v5's full service once at full size and rich
+    "rich_cash": 0.0,       # at cap stores with this much cash (0: off): service rich_service, research rich_research
+    "rich_service": 1.0,
+    "rich_research": 0.2,
 }
 # Hand-made personas from the organizer's reward-design hints, as starting points for the search.
 PERSONAS = {
@@ -198,6 +202,9 @@ def persona_predict(params: dict[str, Any], n_regions: int = 25) -> Callable[...
             if war[0]:
                 price = min(price, p["war_price"])
         mkt, asrt = p["marketing"], p["assortment"]
+        service, research = p["service"], p["research"]
+        if p["rich_cash"] and cash >= p["rich_cash"] and float(obs[idx["stores"]]) >= p["cap"]:
+            service, research = p["rich_service"], p["rich_research"]
         if cash < 0 and float(obs[idx["last_profit"]]) < 0:
             mkt, asrt = mkt * p["lean"], asrt * p["lean"]
         wage = p["wage"]
@@ -207,8 +214,8 @@ def persona_predict(params: dict[str, Any], n_regions: int = 25) -> Callable[...
         return encode_action(
             geo._structured_action(
                 price=price, marketing=mkt, assortment=asrt,
-                promotion=p["promotion"], expansion_choice=target(obs), research=0.0 if frugal else p["research"],
-                service_level=p["service"], automation_tier=0, loyalty_spend=0.0,
+                promotion=p["promotion"], expansion_choice=target(obs), research=0.0 if frugal else research,
+                service_level=service, automation_tier=0, loyalty_spend=0.0,
                 n_regions=n_regions, wage_spend=0.0 if frugal else wage, warehouse_invest=0.0,
             )
         )
@@ -250,4 +257,5 @@ CONTENDERS = {
     # v7 (contender_search.py --v6 8): v5's expansion (mirror) + service 0.2 + undercut where crowded.
     # 463k per game vs v5's 298k over the site lineup and two lineups full of v5-style rivals
     "v7": {**DEFAULT, "order": "mirror", "crowd_price": 0.1, "crowd_floor": 1.7, "service": 0.2, "research": 0.1},
+    "v8": {**DEFAULT, "order": "mirror", "crowd_price": 0.1, "crowd_floor": 1.7, "service": 0.2, "research": 0.1, "rich_cash": 25000.0},
 }

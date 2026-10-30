@@ -26,6 +26,7 @@ import numpy as np
 import torch
 from aggressive_npcs import register
 from stable_baselines3 import A2C, PPO
+from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecNormalize
 from train_vs_npcs import HAPPINESS_BONUS
@@ -75,6 +76,9 @@ ZIPS = {  # trained opponents in the league zoo
     "krischo-mlp-v10-rl": "agents/Krischo/mlp-v10-rl/checkpoint.zip",
     "yavkata-sac-v2": "agents/Yavkata/sac-v2/checkpoint.zip",
     "misho-jack": "agents/misho/jack/checkpoint.zip",
+    "orcho-v7": "agents/orcho/v7/checkpoint.zip",  # v7d: the newest agents (v13 is v7 + 10k steps)
+    "krischo-mlp-v11-rl": "agents/Krischo/mlp-v11-rl/checkpoint.zip",
+    "krischo-mlp-v13": "agents/Krischo/mlp-v13/checkpoint.zip",
 }
 
 
@@ -224,6 +228,7 @@ def main() -> int:
     )
     parser.add_argument("--happy-bonus", type=float, default=HAPPINESS_BONUS, help="reward per tick for fully happy staff (0 = pure profit)")
     parser.add_argument("--zoo", nargs="*", default=[], choices=list(ZIPS), help="train only against these ZIPS entries")
+    parser.add_argument("--save-every", type=int, default=0, help="also save a checkpoint every N steps (<out>-<N>k.zip), for long runs")
     parser.add_argument("--out", type=Path, default=Path("runs/league/orcho-a2c-ft.zip"))
     args = parser.parse_args()
 
@@ -296,16 +301,37 @@ def main() -> int:
         for prm in actor:
             prm.requires_grad_(True)
         model.lr_schedule = lr_now
-    model.learn(total_timesteps=args.steps - args.warmup, reset_num_timesteps=not args.warmup)
-    with torch.no_grad():
-        for seq in (model.policy.mlp_extractor.policy_net, model.policy.mlp_extractor.value_net):
-            seq[0].weight /= torch.as_tensor(scale, dtype=seq[0].weight.dtype)[None, :]
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    model.save(args.out)
-    meta = {"algo": args.algo, "reward": "league", "steps": args.steps, "seed": 0, "ent_coef": 0.0,
-            "start": "scratch" if args.scratch else "clone", "gap_bonus": args.gap_bonus, "warmup": args.warmup, "happy_bonus": args.happy_bonus, "zoo": args.zoo}
-    args.out.with_suffix(".json").write_text(json.dumps(meta) + "\n")
-    print(f"saved {args.out}")
+    def save(path: Path, steps: int) -> None:
+        """Save with the observation scale folded into the first layers (raw observations at scoring time)."""
+        firsts = [seq[0].weight for seq in (model.policy.mlp_extractor.policy_net, model.policy.mlp_extractor.value_net)]
+        with torch.no_grad():
+            for w in firsts:
+                w /= torch.as_tensor(scale, dtype=w.dtype)[None, :]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        model.save(path)
+        with torch.no_grad():  # undo the fold so training can go on
+            for w in firsts:
+                w *= torch.as_tensor(scale, dtype=w.dtype)[None, :]
+        meta = {"algo": args.algo, "reward": "league", "steps": steps, "seed": 0, "ent_coef": 0.0,
+                "start": "scratch" if args.scratch else "clone", "gap_bonus": args.gap_bonus, "warmup": args.warmup, "happy_bonus": args.happy_bonus, "zoo": args.zoo}
+        path.with_suffix(".json").write_text(json.dumps(meta) + "\n")
+        print(f"saved {path}", flush=True)
+
+    class Snapshots(BaseCallback):
+        """--save-every: a checkpoint every N steps, so a long run can be cut back if it overtrains."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.next = args.save_every
+
+        def _on_step(self) -> bool:
+            if args.save_every and self.next < args.steps and self.num_timesteps >= self.next:
+                save(args.out.with_name(f"{args.out.stem}-{self.next // 1000}k.zip"), self.next)
+                self.next += args.save_every
+            return True
+
+    model.learn(total_timesteps=args.steps - args.warmup, reset_num_timesteps=not args.warmup, callback=Snapshots())
+    save(args.out, args.steps)
     return 0
 
 
