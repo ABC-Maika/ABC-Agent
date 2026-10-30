@@ -152,6 +152,37 @@ V7_ROUND8 = {  # v7: v5 plus aggression where it pays
     "v5+svc.2+crowd+w40": {**_S2, "crowd_price": 0.1, "crowd_floor": 1.7, "wage": 0.40},
 }
 
+_V7 = V7_ROUND8["v5+svc.2+crowd"]
+V8_ROUND9 = {  # v8: v7 during the store race, v5's full service once at full size and rich (it starves the runner-up)
+    "v5": _V5M,
+    "v7": _V7,
+    "v8-r10k": {**_V7, "rich_cash": 10000.0},
+    "v8-r25k": {**_V7, "rich_cash": 25000.0},
+    "v8-r50k": {**_V7, "rich_cash": 50000.0},
+    "v8-r25k-s.6": {**_V7, "rich_cash": 25000.0, "rich_service": 0.6},
+    "v8-r25k-res.1": {**_V7, "rich_cash": 25000.0, "rich_research": 0.1},
+    "v8-r100k": {**_V7, "rich_cash": 100000.0},
+}
+
+_K, _Y, _M, _O = "agents/Krischo/", "agents/Yavkata/", "agents/misho/", "agents/orcho/"
+LINEUPS_V8 = {  # round 10 (--v6 10): the newest agents; Orcho v7 and Krischo v13 are twins of each other and of Jerky
+    "newest": (41, [_K + "mlp-v11-rl/checkpoint.zip", _K + "mlp-v13/checkpoint.zip", _M + "jerky/checkpoint.zip", _Y + "sac-v2/checkpoint.zip", _O + "v6.2/checkpoint.zip"], (0, 1, 2, 3, 4, 5)),
+    "twins": (42, [_O + "v7/checkpoint.zip", _K + "mlp-v13/checkpoint.zip", _M + "jerky/checkpoint.zip", _Y + "sac-v2/checkpoint.zip", _K + "mlp-v11-rl/checkpoint.zip"], (0, 1, 2, 3, 4, 5)),
+    "light": LINEUPS_V7["light"],
+    "copies": LINEUPS_V7["copies"],
+}
+_LOW = {**_S2, "order": "index", "cap": 10}  # teammates' finding: lowest region first, 10 stores = never lost money in 60 games
+V8_ROUND10 = {  # a plan that does not share v7's opening
+    "v7": _V7,
+    "low10": _LOW,
+    "low10+crowd": {**_LOW, "crowd_price": 0.1, "crowd_floor": 1.7},
+    "low9": {**_LOW, "cap": 9},
+    "low11": {**_LOW, "cap": 11},
+    "low12+crowd": {**_LOW, "cap": 12, "crowd_price": 0.1, "crowd_floor": 1.7},
+    "v7-cap10": {**_V7, "cap": 10},
+    "low10-svc1": {**_LOW, "service": 1.0, "research": 0.2},
+}
+
 
 def play(job: tuple[dict[str, Any], tuple[Any, ...], int]) -> float:
     import os
@@ -200,7 +231,7 @@ def main() -> None:
     cands = [("v5-recipe", baseline())]
     lineups = dict(LINEUPS)
     if args.v6:
-        rounds = {"1": V6_IDEAS, "2": V6_ROUND2, "3": V6_ROUND3, "4": V6_ROUND4, "5": V6_ROUND5, "6": V6_ROUND6, "7": V6_ROUND7, "8": V7_ROUND8}
+        rounds = {"1": V6_IDEAS, "2": V6_ROUND2, "3": V6_ROUND3, "4": V6_ROUND4, "5": V6_ROUND5, "6": V6_ROUND6, "7": V6_ROUND7, "8": V7_ROUND8, "9": V8_ROUND9, "10": V8_ROUND10}
         cands += [(n, {**baseline(), **d}) for n, d in rounds[args.v6].items()]
         if args.v6 == "4":
             lineups.update(LINEUPS_V6)
@@ -208,8 +239,10 @@ def main() -> None:
             lineups = dict(LINEUPS_V62)
         if args.v6 == "7":
             lineups = dict(LINEUPS_V63)
-        if args.v6 == "8":
+        if args.v6 in ("8", "9"):
             lineups = dict(LINEUPS_V7)
+        if args.v6 == "10":
+            lineups = dict(LINEUPS_V8)
     elif args.one_at_a_time:
         cands += [(n, {**baseline(), **d}) for n, d in ONE_AT_A_TIME.items()]
     else:
