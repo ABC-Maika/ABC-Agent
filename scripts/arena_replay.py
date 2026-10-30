@@ -43,6 +43,7 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--player", action="append", default=[], metavar="LABEL=PATH")
     parser.add_argument("--npc", action="append", default=[], choices=list(NPC_LABELS))
+    parser.add_argument("--homes", default=None, help="comma-separated home region per seat, in seat order")
     parser.add_argument("--out", type=Path, default=Path("runs/replay.html"))
     args = parser.parse_args()
 
@@ -61,6 +62,10 @@ def main() -> int:
 
     cfg, _, _ = resolve_arena_world(balanced=True)
     homes = arena_home_regions(len(seats))
+    if args.homes:
+        homes = tuple(int(h) for h in args.homes.split(","))
+        if len(homes) != len(seats):
+            parser.error(f"--homes needs {len(seats)} regions, got {len(homes)}")
     match = ArenaMatch(cfg, seats, seed=args.seed, homes=homes)
     lever_names: list[str] = []
     rounds = []

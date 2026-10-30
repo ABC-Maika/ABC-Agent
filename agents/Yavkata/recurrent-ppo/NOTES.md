@@ -23,4 +23,9 @@ Smoke-tested (4,096 steps): trains, folds the obs scale (drift 1e-8), saves, rel
 | seeds / homes | score | share | stores | notes |
 |---|---|---|---|---|
 
+## zones variant (2026-10-30): `train_rppo_zones.py` -> `checkpoint_zones.zip` (not wired into entry.json)
+sac-v2 recipe on RecurrentPPO: demonstrator (metro then affluent, cap 3, service 0.15, price 1.9, research 0) -> BC + 2 DAgger rounds -> value fit -> 50k PPO steps (lr 3e-5, clip 0.1) in the Orcho/Krischo field, best held-out snapshot.
+Command: `.venv\Scripts\python.exe agents/Yavkata/recurrent-ppo/train_rppo_zones.py --steps 50000 --cap 3 --bc-epochs 60 --value-epochs 40`
+Measured (eval_field full6, seeds 2,3, 12 matches): zones mean 20k (min -156k, rank 3.58, 0 wins), old checkpoint -153k (rank 5.25). Stores stay at ~2.75 all match. Orcho 1.15M / Krischo 754k in those matches, so a 3-store cap is far below sac-v2 (507k, cap 12).
+
 ## What I learned / what to try next
