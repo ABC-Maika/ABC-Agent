@@ -1,0 +1,8 @@
+{
+  "team": "TODO: team name",
+  "agent_name": "orcho-v7",
+  "policy_kind": "a2c-mlp",
+  "contact": "TODO: contact",
+  "training_recipe": "scripts/league_finetune.py --start runs/v7/orcho-v7-clone.zip --algo a2c --steps 10000 --warmup 3000 --lr 3e-5 --std 0.03 --gamma 0.999 --n-steps 64 --zoo yavkata-sac-v2 misho-jerky krischo-mlp-v10-rl misho-jack orcho-v5 yavkata-sac krischo-mlp-v9 (warm start: clone_recipe.py of the scripted recipe contender-v7 = v5 expansion + service 0.2 + undercut where crowded)",
+  "sb3_version": "2.9.2"
+}

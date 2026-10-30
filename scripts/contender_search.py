@@ -33,6 +33,10 @@ LINEUPS_V6 = {  # round 4 (--v6 4): v6's bad start (home 9, shift 2) on a fresh 
     "field9": (41, LINEUPS["field"][1], (2,)),
     "hunters6": (7, ["npc:hunter-5", "npc:hunter-6", "npc:hunter-7", "npc:hunter-8", "agents/orcho/v5/checkpoint.zip"], SHIFTS),
 }
+LINEUPS_V62 = {  # round 5 (--v6 5): the teammates' new agents, all 6 homes (losses depend on the home)
+    "field2": (31, ["agents/orcho/v6/checkpoint.zip", "agents/Krischo/mlp-v10-rl/checkpoint.zip", "agents/Yavkata/sac-v2/checkpoint.zip",
+                    "agents/misho/jerky/checkpoint.zip", "agents/orcho/v5/checkpoint.zip"], tuple(range(6))),
+}
 SPACE = {"price": (1.8, 2.0), "marketing": (0.8, 1.0), "promotion": (0.7, 1.0), "wage": (0.30, 0.50), "k": (-0.3, 1.5)}
 
 
@@ -92,6 +96,61 @@ V6_ROUND4 = {  # v6 lost from home 9: 4 stores in rivals' homes on round 2 with 
     "v6+nodebtcut+hold": {**_V6, "crowd_cash": 0.0, "hold_crowded": 5000.0},
     "v6+nodebtcut+k.5": {**_V6, "crowd_cash": 0.0, "k": 0.5},
 }
+_V61 = {**_V6, "k": 1.0}  # = hunter_bots.CONTENDERS["v6.1"]
+_S = {**_V61, "survive_cash": -2000.0, "survive_exit": 0.0, "survive_mkt": 0.0}
+V6_ROUND5 = {  # in a field of 12-store agents only two profit per game; the rest crash to -250k in debt
+    "v6.1": _V61,
+    "s2k": _S,
+    "s2k+exit2k+m.3": {**_S, "survive_exit": 2000.0, "survive_mkt": 0.3},
+    "s2k+m.5": {**_S, "survive_mkt": 0.5},
+    "s2k+nopay": {**_S, "survive_pay": 0},
+    "s500": {**_S, "survive_cash": -500.0},
+    "s5k": {**_S, "survive_cash": -5000.0},
+    "s8k": {**_S, "survive_cash": -8000.0},
+}
+V6_ROUND6 = {  # round 5: survival made no difference. The real cliff is cash < -5000 (credit limit): the game then
+    # clamps every lever and the wage to 0 and the seat bleeds ~750/round. Keep marketing, stop the cheap leaks early
+    "v6.1": _V61,
+    "s1k+m1": {**_S, "survive_cash": 1000.0, "survive_exit": 3000.0, "survive_mkt": 1.0},
+    "s1k+m1+nopay": {**_S, "survive_cash": 1000.0, "survive_exit": 3000.0, "survive_mkt": 1.0, "survive_pay": 0},
+    "nocrowd": {**_V61, "crowd_price": 0.0},
+    "v6": _V6,
+    "nocrowd+k.5": {**_V61, "crowd_price": 0.0, "k": 0.5},
+    "debtcut": {**_V61, "crowd_cash": 3000.0},
+}
+LINEUPS_V63 = {  # round 7 (--v6 7): crowded (v6.x wins) and light (v5 wins: jack stays small) fields
+    "crowded": LINEUPS_V62["field2"],
+    "light": (31, ["agents/Yavkata/sac-v2/checkpoint.zip", "agents/misho/jerky/checkpoint.zip", "agents/Krischo/mlp-v10-rl/checkpoint.zip",
+                   "agents/misho/jack/checkpoint.zip", "agents/orcho/v5/checkpoint.zip"], tuple(range(6))),
+}
+_V5M = {"order": "mirror", "k": 0.0, "wage": 0.45, "crowd_price": 0.0, "service": 1.0, "research": 0.2}  # = CONTENDERS["v5"]
+_AD = {**_V61, "adapt_tick": 3, "adapt_thr": 2.25, "light": _V5M}  # rivals per METRO on round 3: crowded 2.33-2.83, light 1.67-2.17
+V6_ROUND7 = {  # option 3: one plan that reads the field early and plays v5 (light field) or v6.1 (crowded field)
+    "v6.1": _V61,
+    "v5-mirror": {**_V5M},
+    "ad3": _AD,
+    "ad3+svc.2": {**_AD, "light": {**_V5M, "service": 0.2, "research": 0.1}},
+    "ad3+score": {**_AD, "light": {**_V5M, "order": "score"}},
+    "ad10": {**_AD, "adapt_tick": 10, "adapt_thr": 2.3},
+    "ad30": {**_AD, "adapt_tick": 30, "adapt_thr": 2.6},
+}
+_SITE = ["agents/Yavkata/sac-v2/checkpoint.zip", "agents/misho/jerky/checkpoint.zip", "agents/Krischo/mlp-v10-rl/checkpoint.zip"]
+LINEUPS_V7 = {  # round 8 (--v6 8): v5 wins the organizer-site lineup (4.0M) but sinks when v5-style rivals crowd it
+    "light": (31, [*_SITE, "agents/misho/jack/checkpoint.zip", "agents/orcho/v6.2/checkpoint.zip"], (0, 2, 4)),
+    "copies": (32, ["agents/orcho/v5/checkpoint.zip", *_SITE[:1], _SITE[2], "agents/orcho/v6.2/checkpoint.zip", _SITE[1]], (0, 2, 4)),
+    "copies2": (33, ["agents/orcho/v5/checkpoint.zip", "runs/v5x/orcho-v5.1a-rl10k.zip", _SITE[0], _SITE[2], _SITE[1]], (1, 3, 5)),
+}
+_S2 = {**_V5M, "service": 0.2, "research": 0.1}  # Yavkata's finding: fill rate 0.6 = the share cap, cheaper goods
+V7_ROUND8 = {  # v7: v5 plus aggression where it pays
+    "v5": _V5M,
+    "v5+svc.2": _S2,
+    "v5+svc.2+crowd": {**_S2, "crowd_price": 0.1, "crowd_floor": 1.7},
+    "v5+svc.2+crowd.2": {**_S2, "crowd_price": 0.2, "crowd_floor": 1.6},
+    "v5+svc.2+fast": {**_S2, "frugal": 2},
+    "v5+svc.2+crowd+fast": {**_S2, "crowd_price": 0.1, "crowd_floor": 1.7, "frugal": 2},
+    "v5+svc.2+crowd+cap13": {**_S2, "crowd_price": 0.1, "crowd_floor": 1.7, "cap": 13},
+    "v5+svc.2+crowd+w40": {**_S2, "crowd_price": 0.1, "crowd_floor": 1.7, "wage": 0.40},
+}
 
 
 def play(job: tuple[dict[str, Any], tuple[Any, ...], int]) -> float:
@@ -130,7 +189,7 @@ def main() -> None:
     sys.path.insert(0, str(ROOT / "scripts"))
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--one-at-a-time", action="store_true", help="single-knob changes from v5 instead of random candidates")
-    parser.add_argument("--v6", nargs="?", const="1", help="the situational v6 ideas instead of random candidates: 1 = V6_IDEAS, 2 = V6_ROUND2, 3 = V6_ROUND3, 4 = V6_ROUND4 (+ LINEUPS_V6)")
+    parser.add_argument("--v6", nargs="?", const="1", help="the situational v6 ideas instead of random candidates: 1 = V6_IDEAS, 2 = V6_ROUND2, 3 = V6_ROUND3, 4 = V6_ROUND4 (+ LINEUPS_V6), 5 = V6_ROUND5 (on LINEUPS_V62 only)")
     parser.add_argument("--n-random", type=int, default=30)
     parser.add_argument("--keep", type=int, default=5)
     parser.add_argument("--workers", type=int, default=6)
@@ -141,10 +200,16 @@ def main() -> None:
     cands = [("v5-recipe", baseline())]
     lineups = dict(LINEUPS)
     if args.v6:
-        rounds = {"1": V6_IDEAS, "2": V6_ROUND2, "3": V6_ROUND3, "4": V6_ROUND4}
+        rounds = {"1": V6_IDEAS, "2": V6_ROUND2, "3": V6_ROUND3, "4": V6_ROUND4, "5": V6_ROUND5, "6": V6_ROUND6, "7": V6_ROUND7, "8": V7_ROUND8}
         cands += [(n, {**baseline(), **d}) for n, d in rounds[args.v6].items()]
         if args.v6 == "4":
             lineups.update(LINEUPS_V6)
+        if args.v6 in ("5", "6"):
+            lineups = dict(LINEUPS_V62)
+        if args.v6 == "7":
+            lineups = dict(LINEUPS_V63)
+        if args.v6 == "8":
+            lineups = dict(LINEUPS_V7)
     elif args.one_at_a_time:
         cands += [(n, {**baseline(), **d}) for n, d in ONE_AT_A_TIME.items()]
     else:

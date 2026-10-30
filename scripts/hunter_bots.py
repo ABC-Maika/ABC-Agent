@@ -33,6 +33,11 @@ DEFAULT = {
     "war_price": 1.6,
     "crowd_cash": -1e18,  # undercut only while cash >= this (0: stop the price war while we are the one in debt)
     "hold_crowded": 0.0,  # while cash < this, open only regions with fewer than 2 rivals (no borrowing into crowds)
+    # v6.2 survival mode: losers of the 12-store race crash to -250k by spending full levers in debt
+    "survive_cash": -1e18,  # enter below this cash: no undercut, no research, marketing/assortment at survive_mkt
+    "survive_exit": 0.0,    # leave once cash is back above this
+    "survive_mkt": 0.0,
+    "survive_pay": 1,       # 0: no smart-pay wage boost while surviving (pay the base wage only)
 }
 # Hand-made personas from the organizer's reward-design hints, as starting points for the search.
 PERSONAS = {
@@ -72,10 +77,34 @@ def _ring_target(obs: Any, idx: dict[str, int], n_regions: int, cap: int) -> int
     return min(empty, key=lambda r: ((r - 1) % 4, r)) if empty else 0
 
 
+def _adaptive_predict(params: dict[str, Any], n_regions: int) -> Callable[..., Any]:
+    """v6.3: on round ``adapt_tick`` count rivals per METRO region; below ``adapt_thr`` (a light field) play the
+    ``light`` overrides (v5 style) for the rest of the game, else the base params (v6.1 style)."""
+    base = {k: v for k, v in params.items() if k not in ("light", "adapt_tick", "adapt_thr")}
+    heavy, light = persona_predict(base, n_regions), persona_predict({**base, **params["light"]}, n_regions)
+    idx = geo._name_to_index(n_regions)
+    metros = range(1, n_regions, 4)
+    state = {"t": 0, "light": False}
+
+    def predict(obs: Any, *, episode_start: bool = False, **kw: Any) -> Any:
+        if episode_start:
+            state.update(t=0, light=False)
+        if state["t"] == params["adapt_tick"]:
+            density = sum(float(obs[idx[f"others_present_region_{r}"]]) for r in metros) / len(metros)
+            state["light"] = density < params["adapt_thr"]
+        state["t"] += 1
+        a_heavy, a_light = heavy(obs, episode_start=episode_start, **kw), light(obs, episode_start=episode_start, **kw)
+        return a_light if state["light"] else a_heavy
+
+    return predict
+
+
 def persona_predict(params: dict[str, Any], n_regions: int = 25) -> Callable[..., Any]:
     """Build a predict function (obs -> action) for one hunter."""
     from retail_simulator.core.encoding import encode_action
 
+    if "light" in params:
+        return _adaptive_predict(params, n_regions)
     p = {**DEFAULT, **params}
     idx = geo._name_to_index(n_regions)
 
@@ -130,15 +159,33 @@ def persona_predict(params: dict[str, Any], n_regions: int = 25) -> Callable[...
 
     tick = [0]
     war = [False]
+    survive = [False]
 
     def predict(obs: Any, *, episode_start: bool = False, **_kw: Any) -> Any:
         if episode_start:
             tick[0] = 0
             war[0] = False
+            survive[0] = False
         t = tick[0]
         tick[0] += 1
         price = p["early_price"] if (p["early_price"] and t < p["switch_tick"]) else p["price"]
         cash = float(obs[idx["cash"]])
+        if not survive[0] and cash < p["survive_cash"]:
+            survive[0] = True
+        elif survive[0] and cash > p["survive_exit"]:
+            survive[0] = False
+        if survive[0]:
+            wage = p["wage"]
+            if p["smart_pay"] and p["survive_pay"]:
+                wage = min(1.0, wage + 4.0 * (1.0 - float(obs[idx["employee_happiness"]])))
+            return encode_action(
+                geo._structured_action(
+                    price=p["price"], marketing=p["survive_mkt"], assortment=p["survive_mkt"],
+                    promotion=p["promotion"], expansion_choice=0, research=0.0,
+                    service_level=p["service"], automation_tier=0, loyalty_spend=0.0,
+                    n_regions=n_regions, wage_spend=wage, warehouse_invest=0.0,
+                )
+            )
         if p["crowd_price"] and cash >= p["crowd_cash"]:
             own = [r for r in range(1, n_regions) if float(obs[idx[f"stores_region_{r}"]]) > 0]
             crowd = sum(float(obs[idx[f"others_present_region_{r}"]]) for r in own) / max(1, len(own))
@@ -200,4 +247,7 @@ CONTENDERS = {
     # collapsed from home 9 by opening three rivals' homes with no cash. 529k per game, worst game +262k (v6: -232k)
     "v6.1": {**DEFAULT, "order": "score", "k": 1.0, "wage": 0.40, "crowd_price": 0.1, "crowd_floor": 1.7,
              "service": 0.2, "research": 0.1},
+    # v7 (contender_search.py --v6 8): v5's expansion (mirror) + service 0.2 + undercut where crowded.
+    # 463k per game vs v5's 298k over the site lineup and two lineups full of v5-style rivals
+    "v7": {**DEFAULT, "order": "mirror", "crowd_price": 0.1, "crowd_floor": 1.7, "service": 0.2, "research": 0.1},
 }
