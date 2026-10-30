@@ -3,6 +3,6 @@
   "agent_name": "Jerky",
   "policy_kind": "tqc",
   "contact": "orlinss2008@gmail.com",
-  "training_recipe": "agents/misho/jacky-t: TQC MlpPolicy 512x512, behaviour clone of the scripted lever-lab recipe (lever_lab.py: price 2.0, marketing/assortment/promotion 1.0, service 0.2, research 0.1, wage 0.45 + 4 x (1 - happiness), METRO then AFFLUENT highest region first, 10 stores); lab_collect.py play+dagger data, mimic.py bc --new-net 512,512; no RL steps after the clone; research cap 0.4; obs scale folded into the network, expansion masking",
+  "training_recipe": "agents/misho/jacky-t: TQC MlpPolicy 512x512, behaviour clone of the scripted lever-lab recipe, lowest region first (lever_lab.py: price 2.0, marketing/assortment/promotion 1.0, service 0.2, research 0.1, wage 0.45 + 4 x (1 - happiness), METRO and AFFLUENT lowest region first, 10 stores); lab_collect.py play+dagger data, mimic.py bc --new-net 512,512; no RL steps after the clone; research cap 0.4; obs scale folded into the network, expansion masking",
   "sb3_version": "2.9.2"
 }
