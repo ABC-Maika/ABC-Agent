@@ -39,6 +39,7 @@ VARIANTS = {
     "jackrec": dict(price=2.0, service=0.2, research=0.1, loyalty=0.4, cap=12, nclass=2, order="low",
                     crowd_price=0.1, crowd_floor=1.7, war_cash=25000, war_price=1.8, war_profit=300.0,
                     stuck={"wage": 0.2, "service": 0.0, "research": 0.0}),  # lowest region first + gated price war + stuck-state levers
+    "low10": dict(price=2.0, service=0.2, research=0.1, loyalty=0.4, cap=10, nclass=2, order="low"),  # lowest region first, 10 stores: no negative game in 60 scripted games
     "18": dict(price=1.8, service=0.2, research=0.1, loyalty=0.4, cap=18, nclass=3),
 }
 
