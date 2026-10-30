@@ -27,7 +27,8 @@ FIXED = {
 }
 SPACE = {
     "price": (0.9, 2.0), "marketing": (0.4, 1.0), "assortment": (0.4, 1.0), "promotion": (0.0, 1.0),
-    "service": (0.4, 1.0), "research": (0.0, 0.5), "wage": (0.3, 0.7), "early_price": (0.0, 1.5),
+    "service": (0.2, 1.0), "research": (0.0, 0.5), "wage": (0.3, 0.7), "early_price": (0.0, 1.5),
+    "crowd_price": (0.0, 0.3), "k": (-0.5, 1.5),  # v6-style situational undercut; region scoring for order "score"
 }
 
 
