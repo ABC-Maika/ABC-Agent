@@ -77,10 +77,34 @@ def _ring_target(obs: Any, idx: dict[str, int], n_regions: int, cap: int) -> int
     return min(empty, key=lambda r: ((r - 1) % 4, r)) if empty else 0
 
 
+def _adaptive_predict(params: dict[str, Any], n_regions: int) -> Callable[..., Any]:
+    """v6.3: on round ``adapt_tick`` count rivals per METRO region; below ``adapt_thr`` (a light field) play the
+    ``light`` overrides (v5 style) for the rest of the game, else the base params (v6.1 style)."""
+    base = {k: v for k, v in params.items() if k not in ("light", "adapt_tick", "adapt_thr")}
+    heavy, light = persona_predict(base, n_regions), persona_predict({**base, **params["light"]}, n_regions)
+    idx = geo._name_to_index(n_regions)
+    metros = range(1, n_regions, 4)
+    state = {"t": 0, "light": False}
+
+    def predict(obs: Any, *, episode_start: bool = False, **kw: Any) -> Any:
+        if episode_start:
+            state.update(t=0, light=False)
+        if state["t"] == params["adapt_tick"]:
+            density = sum(float(obs[idx[f"others_present_region_{r}"]]) for r in metros) / len(metros)
+            state["light"] = density < params["adapt_thr"]
+        state["t"] += 1
+        a_heavy, a_light = heavy(obs, episode_start=episode_start, **kw), light(obs, episode_start=episode_start, **kw)
+        return a_light if state["light"] else a_heavy
+
+    return predict
+
+
 def persona_predict(params: dict[str, Any], n_regions: int = 25) -> Callable[..., Any]:
     """Build a predict function (obs -> action) for one hunter."""
     from retail_simulator.core.encoding import encode_action
 
+    if "light" in params:
+        return _adaptive_predict(params, n_regions)
     p = {**DEFAULT, **params}
     idx = geo._name_to_index(n_regions)
 
@@ -223,4 +247,7 @@ CONTENDERS = {
     # collapsed from home 9 by opening three rivals' homes with no cash. 529k per game, worst game +262k (v6: -232k)
     "v6.1": {**DEFAULT, "order": "score", "k": 1.0, "wage": 0.40, "crowd_price": 0.1, "crowd_floor": 1.7,
              "service": 0.2, "research": 0.1},
+    # v7 (contender_search.py --v6 8): v5's expansion (mirror) + service 0.2 + undercut where crowded.
+    # 463k per game vs v5's 298k over the site lineup and two lineups full of v5-style rivals
+    "v7": {**DEFAULT, "order": "mirror", "crowd_price": 0.1, "crowd_floor": 1.7, "service": 0.2, "research": 0.1},
 }

@@ -74,6 +74,7 @@ ZIPS = {  # trained opponents in the league zoo
     "misho-jerky": "agents/misho/jerky/checkpoint.zip",
     "krischo-mlp-v10-rl": "agents/Krischo/mlp-v10-rl/checkpoint.zip",
     "yavkata-sac-v2": "agents/Yavkata/sac-v2/checkpoint.zip",
+    "misho-jack": "agents/misho/jack/checkpoint.zip",
 }
 
 
@@ -115,10 +116,12 @@ def random_recipe(rng: random.Random, n_regions: int, idx: dict[str, int]) -> An
 
 class LeagueEnv(gym.Env):
     def __init__(
-        self, seed: int, scale: np.ndarray, ticks: int = 1000, gap_bonus: float = 0.0, happy_bonus: float = HAPPINESS_BONUS
+        self, seed: int, scale: np.ndarray, ticks: int = 1000, gap_bonus: float = 0.0, happy_bonus: float = HAPPINESS_BONUS,
+        zoo: tuple[str, ...] = (),
     ) -> None:
         super().__init__()
         self.gap_bonus = gap_bonus  # extra reward per unit by which we out-earn the strongest rival
+        self.zoo = zoo  # if set: all five rivals are drawn from these ZIPS entries (a focused field)
         self.happy_bonus = happy_bonus  # 300/tick dwarfs ~100/tick profit: RL then overpays wages (v6.1 drifted to wage 1.0)
         register()  # also needed inside spawned worker processes
         self.np_random, _ = gym.utils.seeding.np_random(seed)
@@ -144,7 +147,7 @@ class LeagueEnv(gym.Env):
         rng = random.Random(int(self.np_random.integers(0, 2**31 - 1)))
         homes = tuple(int(h) for h in self.np_random.permutation(HOMES))
         roster = arena_match.geo_archetypes(len(self.regions), self.regions)
-        kinds = rng.sample(["scripted"] * 3 + ["random"] * 2 + ["zip"] * 4, 5)
+        kinds = ["zip"] * 5 if self.zoo else rng.sample(["scripted"] * 3 + ["random"] * 2 + ["zip"] * 4, 5)
         self.opponents, masked = [], [0]
         for seat, kind in enumerate(kinds, start=1):
             if kind == "scripted":
@@ -152,7 +155,7 @@ class LeagueEnv(gym.Env):
             elif kind == "random":
                 self.opponents.append(random_recipe(rng, len(self.regions), self.idx))
             else:
-                self.opponents.append(self._zip_predict(rng.choice(list(ZIPS))))
+                self.opponents.append(self._zip_predict(rng.choice(list(self.zoo or ZIPS))))
                 masked.append(seat)
         self.world = RetailParallelEnv(
             self.config,
@@ -188,8 +191,10 @@ class LeagueEnv(gym.Env):
         return obs0, reward, False, self.t >= self.ticks, {}
 
 
-def make_env(seed: int, scale: np.ndarray, gap_bonus: float = 0.0, happy_bonus: float = HAPPINESS_BONUS) -> Monitor:
-    return Monitor(LeagueEnv(seed, scale, gap_bonus=gap_bonus, happy_bonus=happy_bonus))
+def make_env(
+    seed: int, scale: np.ndarray, gap_bonus: float = 0.0, happy_bonus: float = HAPPINESS_BONUS, zoo: tuple[str, ...] = ()
+) -> Monitor:
+    return Monitor(LeagueEnv(seed, scale, gap_bonus=gap_bonus, happy_bonus=happy_bonus, zoo=zoo))
 
 
 # Registry defaults of the continuous levers (action index -> default): a neutral starting point.
@@ -218,6 +223,7 @@ def main() -> int:
         help="extra reward per unit by which we out-earn the strongest rival, paid only while first",
     )
     parser.add_argument("--happy-bonus", type=float, default=HAPPINESS_BONUS, help="reward per tick for fully happy staff (0 = pure profit)")
+    parser.add_argument("--zoo", nargs="*", default=[], choices=list(ZIPS), help="train only against these ZIPS entries")
     parser.add_argument("--out", type=Path, default=Path("runs/league/orcho-a2c-ft.zip"))
     args = parser.parse_args()
 
@@ -232,7 +238,7 @@ def main() -> int:
 
     env_cls = SubprocVecEnv if args.subproc else DummyVecEnv
     venv = VecNormalize(
-        env_cls([partial(make_env, seed, scale, args.gap_bonus, args.happy_bonus) for seed in range(args.n_envs)]),
+        env_cls([partial(make_env, seed, scale, args.gap_bonus, args.happy_bonus, tuple(args.zoo)) for seed in range(args.n_envs)]),
         norm_obs=False,
         norm_reward=True,
     )
@@ -297,7 +303,7 @@ def main() -> int:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     model.save(args.out)
     meta = {"algo": args.algo, "reward": "league", "steps": args.steps, "seed": 0, "ent_coef": 0.0,
-            "start": "scratch" if args.scratch else "clone", "gap_bonus": args.gap_bonus, "warmup": args.warmup, "happy_bonus": args.happy_bonus}
+            "start": "scratch" if args.scratch else "clone", "gap_bonus": args.gap_bonus, "warmup": args.warmup, "happy_bonus": args.happy_bonus, "zoo": args.zoo}
     args.out.with_suffix(".json").write_text(json.dumps(meta) + "\n")
     print(f"saved {args.out}")
     return 0

@@ -118,6 +118,39 @@ V6_ROUND6 = {  # round 5: survival made no difference. The real cliff is cash < 
     "nocrowd+k.5": {**_V61, "crowd_price": 0.0, "k": 0.5},
     "debtcut": {**_V61, "crowd_cash": 3000.0},
 }
+LINEUPS_V63 = {  # round 7 (--v6 7): crowded (v6.x wins) and light (v5 wins: jack stays small) fields
+    "crowded": LINEUPS_V62["field2"],
+    "light": (31, ["agents/Yavkata/sac-v2/checkpoint.zip", "agents/misho/jerky/checkpoint.zip", "agents/Krischo/mlp-v10-rl/checkpoint.zip",
+                   "agents/misho/jack/checkpoint.zip", "agents/orcho/v5/checkpoint.zip"], tuple(range(6))),
+}
+_V5M = {"order": "mirror", "k": 0.0, "wage": 0.45, "crowd_price": 0.0, "service": 1.0, "research": 0.2}  # = CONTENDERS["v5"]
+_AD = {**_V61, "adapt_tick": 3, "adapt_thr": 2.25, "light": _V5M}  # rivals per METRO on round 3: crowded 2.33-2.83, light 1.67-2.17
+V6_ROUND7 = {  # option 3: one plan that reads the field early and plays v5 (light field) or v6.1 (crowded field)
+    "v6.1": _V61,
+    "v5-mirror": {**_V5M},
+    "ad3": _AD,
+    "ad3+svc.2": {**_AD, "light": {**_V5M, "service": 0.2, "research": 0.1}},
+    "ad3+score": {**_AD, "light": {**_V5M, "order": "score"}},
+    "ad10": {**_AD, "adapt_tick": 10, "adapt_thr": 2.3},
+    "ad30": {**_AD, "adapt_tick": 30, "adapt_thr": 2.6},
+}
+_SITE = ["agents/Yavkata/sac-v2/checkpoint.zip", "agents/misho/jerky/checkpoint.zip", "agents/Krischo/mlp-v10-rl/checkpoint.zip"]
+LINEUPS_V7 = {  # round 8 (--v6 8): v5 wins the organizer-site lineup (4.0M) but sinks when v5-style rivals crowd it
+    "light": (31, [*_SITE, "agents/misho/jack/checkpoint.zip", "agents/orcho/v6.2/checkpoint.zip"], (0, 2, 4)),
+    "copies": (32, ["agents/orcho/v5/checkpoint.zip", *_SITE[:1], _SITE[2], "agents/orcho/v6.2/checkpoint.zip", _SITE[1]], (0, 2, 4)),
+    "copies2": (33, ["agents/orcho/v5/checkpoint.zip", "runs/v5x/orcho-v5.1a-rl10k.zip", _SITE[0], _SITE[2], _SITE[1]], (1, 3, 5)),
+}
+_S2 = {**_V5M, "service": 0.2, "research": 0.1}  # Yavkata's finding: fill rate 0.6 = the share cap, cheaper goods
+V7_ROUND8 = {  # v7: v5 plus aggression where it pays
+    "v5": _V5M,
+    "v5+svc.2": _S2,
+    "v5+svc.2+crowd": {**_S2, "crowd_price": 0.1, "crowd_floor": 1.7},
+    "v5+svc.2+crowd.2": {**_S2, "crowd_price": 0.2, "crowd_floor": 1.6},
+    "v5+svc.2+fast": {**_S2, "frugal": 2},
+    "v5+svc.2+crowd+fast": {**_S2, "crowd_price": 0.1, "crowd_floor": 1.7, "frugal": 2},
+    "v5+svc.2+crowd+cap13": {**_S2, "crowd_price": 0.1, "crowd_floor": 1.7, "cap": 13},
+    "v5+svc.2+crowd+w40": {**_S2, "crowd_price": 0.1, "crowd_floor": 1.7, "wage": 0.40},
+}
 
 
 def play(job: tuple[dict[str, Any], tuple[Any, ...], int]) -> float:
@@ -167,12 +200,16 @@ def main() -> None:
     cands = [("v5-recipe", baseline())]
     lineups = dict(LINEUPS)
     if args.v6:
-        rounds = {"1": V6_IDEAS, "2": V6_ROUND2, "3": V6_ROUND3, "4": V6_ROUND4, "5": V6_ROUND5, "6": V6_ROUND6}
+        rounds = {"1": V6_IDEAS, "2": V6_ROUND2, "3": V6_ROUND3, "4": V6_ROUND4, "5": V6_ROUND5, "6": V6_ROUND6, "7": V6_ROUND7, "8": V7_ROUND8}
         cands += [(n, {**baseline(), **d}) for n, d in rounds[args.v6].items()]
         if args.v6 == "4":
             lineups.update(LINEUPS_V6)
         if args.v6 in ("5", "6"):
             lineups = dict(LINEUPS_V62)
+        if args.v6 == "7":
+            lineups = dict(LINEUPS_V63)
+        if args.v6 == "8":
+            lineups = dict(LINEUPS_V7)
     elif args.one_at_a_time:
         cands += [(n, {**baseline(), **d}) for n, d in ONE_AT_A_TIME.items()]
     else:
