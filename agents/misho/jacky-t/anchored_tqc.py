@@ -31,6 +31,7 @@ def load_demos(
     paths: Sequence[Path], max_rank: int = 0, wage_floor: float = 0.0, expand_boost: int = 1,
     early_wage: float = 0.0,
     frugal_opening: bool = False,
+    opening_boost: int = 1,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Teacher recordings from ``mimic.py collect``, with the teachers' flawed episodes removed.
 
@@ -70,6 +71,13 @@ def load_demos(
         for slot in flatten_action_space_layout().levers:
             if slot.spec.name in ("wage_spend", "research"):
                 act[first, slot.offset] = 0.0
+    if opening_boost > 1:
+        # The first 150 rounds decide the match (about 100 cash at round 3 is 4 stores or 3) but are only
+        # 15% of the rows, so they are repeated to make the clone fit the opening closely.
+        early_rows = np.flatnonzero((np.arange(len(act)) % 1000) < 150)
+        reps = np.concatenate([np.arange(len(act))] + [early_rows] * (opening_boost - 1))
+        print(f"opening rows {len(early_rows)} x{opening_boost}")
+        obs, act = obs[reps], act[reps]
     if expand_boost > 1:
         for slot in flatten_action_space_layout().levers:
             if slot.spec.name == "expansion":

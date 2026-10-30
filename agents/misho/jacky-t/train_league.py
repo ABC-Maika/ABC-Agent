@@ -68,6 +68,16 @@ OPPONENTS: dict[str, str] = {  # the trained agents on main
     "kmlp8": "agents/Krischo/mlp-v8/checkpoint.zip",
     "orcho-v5": "agents/orcho/v5/checkpoint.zip",
     "yav-sac": "agents/Yavkata/sac/checkpoint.zip",
+    "yav-sac2": "agents/Yavkata/sac-v2/checkpoint.zip",
+    "kmlp9": "agents/Krischo/mlp-v9/checkpoint.zip",
+    "kmlp10": "agents/Krischo/mlp-v10/checkpoint.zip",
+    "kmlp10rl": "agents/Krischo/mlp-v10-rl/checkpoint.zip",
+    "kmlp11": "agents/Krischo/mlp-v11/checkpoint.zip",
+    "kmlp11rl": "agents/Krischo/mlp-v11-rl/checkpoint.zip",
+    "orcho-v6": "agents/orcho/v6/checkpoint.zip",
+    "orcho-v61": "agents/orcho/v6.1/checkpoint.zip",
+    "orcho-v62": "agents/orcho/v6.2/checkpoint.zip",
+    "orcho-v7": "agents/orcho/v7/checkpoint.zip",
     # Hall of fame: a frozen copy of Jacky-T v1.1, so a new candidate cannot win by forgetting it.
     "jacky-v11": "runs/hof/jacky_v11.zip",
 }
@@ -77,20 +87,38 @@ PERSONAS = ("cherry-picker+", "fast-follower+", "sprawler+", "orcho-recipe2")
 EPISODE_OPPONENTS = N_SEATS - 1
 
 
-def capped_action_space(research_cap: float | None) -> spaces.Box:
+def parse_bands(items: list[str] | None) -> dict[str, tuple[float, float]]:
+    """``name=low:high`` pairs for ``--lever-bands`` (e.g. ``price_index=1.9:2.0``)."""
+    bands = {}
+    for item in items or []:
+        name, _, rng = item.partition("=")
+        low, _, high = rng.partition(":")
+        bands[name] = (float(low), float(high))
+    return bands
+
+
+def capped_action_space(
+    research_cap: float | None, bands: dict[str, tuple[float, float]] | None = None
+) -> spaces.Box:
     """The bounded-logit training space, with the research lever's upper bound lowered to the cap.
 
     The bound is stored in the saved zip (a plain ``Box``) and the policy rescales its tanh output
     into it, so a saved policy can never ask for more research than the cap.
     """
     space = jacky.base.bounded_logit_space(build_action_space())
-    if research_cap is None:
+    if research_cap is None and not bands:
         return space
-    high = space.high.copy()
+    low, high = space.low.copy(), space.high.copy()
     for slot in flatten_action_space_layout().levers:
-        if slot.spec.name == "research":
+        name = slot.spec.name
+        if name == "research" and research_cap is not None:
             high[slot.offset] = min(float(high[slot.offset]), research_cap)
-    return spaces.Box(low=space.low, high=high, dtype=np.float32)
+        # Levers the lab recipe pins at an end of their range keep that end and lift the other, so
+        # the cloned (saturated) actor output keeps its meaning but RL cannot walk the lever away.
+        if bands and name in bands:
+            low[slot.offset] = max(float(low[slot.offset]), bands[name][0])
+            high[slot.offset] = min(float(high[slot.offset]), bands[name][1])
+    return spaces.Box(low=low, high=high, dtype=np.float32)
 
 
 MARGIN = 0.39  # profit / revenue before running costs, read from KMlp8's trace (rough)
@@ -181,6 +209,7 @@ class LeagueEnv(gym.Env):
         score_rule: bool = False,
         retaliate: float = 0.0,
         research_cap: float | None = None,
+        lever_bands: dict[str, tuple[float, float]] | None = None,
         raw_profit_scale: float | None = None,
         lead_shaping: float = 0.0,
         shaping_fade_episodes: int = 0,
@@ -257,7 +286,7 @@ class LeagueEnv(gym.Env):
         self._prime_idx = [obs_index[f"market_share_region_{r}"] for r in prime]
         self._prime_w = demand / demand.sum()
         self.observation_space = build_observation_space(self.config)
-        self.action_space = capped_action_space(research_cap)
+        self.action_space = capped_action_space(research_cap, lever_bands)
         self._predicts: dict[str, Any] = {}
 
     def _predict(self, name: str) -> Any:
@@ -277,6 +306,35 @@ class LeagueEnv(gym.Env):
             )
         return self._predicts[name]
 
+    @staticmethod
+    def family(name: str) -> str:
+        """Which team's play style a rival is: two of one family sit in each other's regions and stop each
+        other winning, and a tournament seats one entry per team."""
+        n = name.lower()
+        if n.startswith(("orcho", "contender")):
+            return "orcho"
+        if n.startswith(("krischo", "kmlp")):
+            return "krischo"
+        if n.startswith("yav"):
+            return "yavkata"
+        if n.startswith(("jack", "jacky")):
+            return "misho"
+        return n  # every scripted archetype stands for its own unknown team
+
+    def _draw_distinct_families(self, rng: random.Random) -> list[str]:
+        order = rng.sample(self.pool, len(self.pool))
+        names, used = [], set()
+        for name in order:
+            fam = self.family(name)
+            if fam == "misho":
+                continue  # our own team's older agents: a tournament seats one checkpoint per team
+            if fam not in used:
+                names.append(name)
+                used.add(fam)
+            if len(names) == EPISODE_OPPONENTS:
+                return names
+        return rng.sample(self.pool, EPISODE_OPPONENTS)  # too few families in the pool: allow repeats
+
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None) -> Any:
         super().reset(seed=seed)
         rng = random.Random(int(self.np_random.integers(0, 2**31 - 1)))
@@ -288,7 +346,7 @@ class LeagueEnv(gym.Env):
             homes = self.fixed_homes
         else:
             homes = tuple(int(h) for h in self.np_random.permutation(self.homes))
-        names = rng.sample(self.pool, EPISODE_OPPONENTS)
+        names = self._draw_distinct_families(rng)
         self.opponents = [self._predict(name) for name in names]
         self.world = RetailParallelEnv(
             self.config,
@@ -510,6 +568,7 @@ def make_one(seed: int, obs_scale: np.ndarray, args: argparse.Namespace) -> Moni
             retaliate=args.retaliate,
             open_early_mult=args.open_early_mult,
             research_cap=args.research_cap,
+            lever_bands=parse_bands(args.lever_bands),
             raw_profit_scale=args.raw_profit_scale,
             lead_shaping=args.lead_shaping,
             shaping_fade_episodes=args.shaping_fade_episodes,
@@ -538,7 +597,7 @@ def train(args: argparse.Namespace) -> TQC:
     model = learner.load(
         args.resume,
         env=venv,
-        custom_objects={"action_space": capped_action_space(args.research_cap)},
+        custom_objects={"action_space": capped_action_space(args.research_cap, parse_bands(args.lever_bands))},
     )
     if args.anchor_data:
         demo_obs, demo_act = load_demos(
@@ -608,7 +667,8 @@ def train(args: argparse.Namespace) -> TQC:
     venv.close()
 
     # Fold the obs scale in, checking the network is unchanged on observations of this env.
-    env = LeagueEnv(args.seed + 1, obs_scale, args.reward_weights, 0.0, 0.0, 0, research_cap=args.research_cap)
+    env = LeagueEnv(args.seed + 1, obs_scale, args.reward_weights, 0.0, 0.0, 0, research_cap=args.research_cap,
+                    lever_bands=parse_bands(args.lever_bands))
     scaled, _ = env.reset()
     samples = [scaled]
     for _ in range(40):
@@ -699,6 +759,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--research-cap", type=float, default=None, help="upper bound of the research lever"
+    )
+    parser.add_argument(
+        "--lever-bands", nargs="+", default=None, help="name=low:high bounds, e.g. price_index=1.9:2.0"
     )
     parser.add_argument("--gamma", type=float, default=None, help="discount; default: the snapshot's")
     parser.add_argument("--actor-freeze", type=int, default=0, help="steps with the actor frozen")
